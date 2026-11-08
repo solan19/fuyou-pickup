@@ -425,7 +425,9 @@ object PddNative {
 
     fun trackStatusesResult(ses: Session, orderSns: List<String>): TrackStatusResult {
         if (!ses.usable) return TrackStatusResult(false, emptyMap(), orderSns.toSet(), "session unavailable")
-        val sns = orderSns.filter { it.isNotBlank() }.distinct().take(10)
+        // ★ vc700：状态枚举上限 10 → 30 —— 在途件超过 10 个时，
+        // 排在前 10 之后的单拿不到物流状态，会出现「11 件只显示 8 件」的分栏失败
+        val sns = orderSns.filter { it.isNotBlank() }.distinct().take(30)
         if (sns.isEmpty()) return TrackStatusResult(true, emptyMap(), emptySet())
         return try {
             val arr = JSONArray()
