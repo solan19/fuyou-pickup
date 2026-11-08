@@ -64,9 +64,63 @@ class IdNotifyListener : NotificationListenerService() {
             return
         }
         Log.i(TAG, "从通知里抠到取件码 $code（来源 ${sbn.packageName}）")
+        // ★ vc692：先把码写进取件码缓存（用户要求），再照旧弹通知
+        persistCode(text, code)
         TrackNotifier.notifyUpdate(this, "ntf:$code", "", "通知里的取件码 $code")
     }
 
+    /**
+     * ★ vc692：把通知里抠到的取件码写入本机取件码缓存（用户要求：通知里有码就直接写入）。
+     *
+     * 与接口来源的冲突规则（用户指定）：
+     *   ① **一致则丢弃**：任何来源已经有同一个码 ⇒ 不重复写、不建第二张卡；
+     *   ② **不一致按规则**：能认出同一个单号但码不同 ⇒ 接口是权威来源，保留接口码，
+     *      通知码不另存（否则同一单会出两张卡）；
+     *   ③ 其余情况 ⇒ 正常写入，来源标记为 `ntf`（取件码栏会显示「通知」标签）。
+     */
+    private fun persistCode(text: String, code: String) {
+        try {
+            val all = PddCodeStore.all(this)
+            if (all.values.any { it.code == code }) {
+                Log.i(TAG, "通知码 $code 已存在（与接口来源一致）⇒ 丢弃，不重复写入")
+                return
+            }
+            val wb = waybillOf(text)
+            if (wb.isNotEmpty()) {
+                val clash = all.values.firstOrNull {
+                    it.waybill.isNotBlank() && it.waybill == wb && it.code != code
+                }
+                if (clash != null) {
+                    Log.i(TAG, "通知码 $code 与接口码 ${clash.code}（单号 $wb）不一致 ⇒ 按接口优先保留")
+                    return
+                }
+            }
+            val st = stationOf(text)
+            PddCodeStore.put(this, "ntf:$code", PddCodeStore.Cached(
+                src = "ntf",
+                code = code,
+                station = st,
+                waybill = wb,
+                latest = text.trim().take(80),
+                ts = System.currentTimeMillis()
+            ))
+            Log.i(TAG, "通知码 $code 已写入取件码缓存（站=$st 单号=$wb）")
+        } catch (t: Throwable) {
+            Log.w(TAG, "写入通知取件码失败: ${t.message}")
+        }
+    }
+
+    /** 从通知文本里尽力认出运单号（取件码通知常写整号或「尾号XXXX」） */
+    private fun waybillOf(text: String): String {
+        val m = Regex("(?:运单号|快递单号|单号|尾号)[是为：:\\s]*([0-9A-Za-z]{4,})").find(text)
+        return m?.groupValues?.get(1)?.trim().orEmpty()
+    }
+
+    /** 从通知文本里尽力认出驿站 / 快递柜名（认不出返回空串，卡上就不显示地址） */
+    private fun stationOf(text: String): String {
+        val m = Regex("([\\u4e00-\\u9fa5A-Za-z0-9]{2,18}(?:驿站|快递柜|代收点|自提点|服务点|便利店))").find(text)
+        return m?.groupValues?.get(1)?.trim()?.take(60).orEmpty()
+    }
     companion object {
         private const val TAG = "IdNotifyListener"
 
