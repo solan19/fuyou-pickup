@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  小组件里的一个取件码格子（vc289 重写：深底白字默认色，磨砂玻璃材质由
+  HomeWidgets 渲染时 setTextColor 换深色）。
+  textSize 只是默认值：码长不固定（4~8 位），渲染时按格子实际尺寸 + 位数
+  setTextViewTextSize 重算，写死必然有长码被截断。
+-->
+<resources>
+    <style name="WidgetCodeCell">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">match_parent</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:layout_margin">2dp</item>
+        <item name="android:gravity">center</item>
+        <item name="android:textSize">11sp</item>
+        <item name="android:textColor">#FFFFFFFF</item>
+        <item name="android:typeface">monospace</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:ellipsize">end</item>
+    </style>
+</resources>

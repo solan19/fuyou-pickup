@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  鲸鱼娘小组件 2×2（vc298）：整幅鲸鱼娘铺满整个矩形 + 台词气泡 + 右下角在途件数徽标。
+
+  ★ 同志要求沿革：
+    · 10-17 ①：「小组件是大矩形，矩形内为鲸鱼娘形象，不要分割开来」⇒ 2×2 保持整幅不分割。
+    · 10-17 ②：「现在取消GIF动图，全部更改为静态图」⇒ src 直接指向 PNG。
+    · 10-17 ③：「有途中快递时在两个组件的右下角以圆形蓝色背景以数字形式显示途中快递数量，
+                不需要做的很大，仔细看能看清就行」⇒ 新增 @+id/wk_transit_badge。
+
+  · 鲸鱼娘：透明底静态图，fitCenter，直接站壁纸上。
+  · 气泡：半透明圆角框，浮在底部；平时 GONE，点击后显示台词，4 秒后收回。
+  · 徽标：右下角 22dp 圆，蓝底白字；**只有在途件 > 0 时才 VISIBLE**。
+  · 气泡文字/底色走 values / values-night 双套色，系统深浅色自动切换。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/wk_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <!-- 整幅鲸鱼娘：静态 PNG -->
+    <ImageView
+        android:id="@+id/wk_char"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="fitCenter"
+        android:src="@drawable/whale_study"
+        android:contentDescription="@string/whale_name" />
+
+    <!-- 台词气泡：浮在底部，平时 GONE -->
+    <LinearLayout
+        android:id="@+id/wk_bubble"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="4dp"
+        android:layout_marginLeft="4dp"
+        android:layout_marginRight="4dp"
+        android:orientation="vertical"
+        android:background="@drawable/wk_bubble_bg"
+        android:paddingLeft="10dp"
+        android:paddingRight="10dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/wk_say"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:maxWidth="132dp"
+            android:text="@string/whale_xml_def_say"
+            android:textColor="@color/wk_text"
+            android:textSize="11sp"
+            android:maxLines="4"
+            android:ellipsize="end" />
+
+        <!-- 取件码信息行：浮在气泡内第二行，有码时显示 -->
+        <TextView
+            android:id="@+id/wk_info"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="3dp"
+            android:maxWidth="132dp"
+            android:textColor="@color/wk_accent"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:maxLines="2"
+            android:ellipsize="end"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <!-- 右下角在途件数徽标：圆 16dp，蓝底 60% 不透明，仅在途件 > 0 时显示 -->
+    <TextView
+        android:id="@+id/wk_transit_badge"
+        android:layout_width="16dp"
+        android:layout_height="16dp"
+        android:layout_gravity="bottom|right"
+        android:layout_marginRight="3dp"
+        android:layout_marginBottom="3dp"
+        android:background="@drawable/wk_badge_bg"
+        android:gravity="center"
+        android:textColor="#E6FFFFFF"
+        android:textSize="9sp"
+        android:textStyle="bold"
+        android:includeFontPadding="false"
+        android:maxLines="1"
+        android:visibility="gone" />
+
+    <!-- 隐藏占位：2×2 不用，但 render() 会 setViewVisibility，保留以防 NPE -->
+    <TextView
+        android:id="@+id/wk_name"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:visibility="gone" />
+</FrameLayout>

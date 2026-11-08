@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    控制中心磁贴图标（2026-10-15，同志要求：磁贴不能再用方形 App 图标）
+    —— 与 App 图标同源的「条码」元素，重新设计为 **24dp 单色线条版**：
+    · 磁贴规范要求单色（monochrome）：系统会自动染色（深色主题=白、浅色主题=深）
+      ⇒ 只填纯白，不要彩色、不要背景
+    · 原 App 图标 8 根条在 24dp 下太密会糊，简化到 6 根、宽窄交错保留节奏感
+    · 左右边距 3/3 对称，条高 16（上下留边 4），缩到磁贴实际尺寸仍清晰
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path android:fillColor="#FFFFFFFF" android:pathData="M3,4h2v16h-2z"/>
+    <path android:fillColor="#FFFFFFFF" android:pathData="M7,4h1v16h-1z"/>
+    <path android:fillColor="#FFFFFFFF" android:pathData="M10,4h2v16h-2z"/>
+    <path android:fillColor="#FFFFFFFF" android:pathData="M14,4h1v16h-1z"/>
+    <path android:fillColor="#FFFFFFFF" android:pathData="M17,4h2v16h-2z"/>
+    <path android:fillColor="#FFFFFFFF" android:pathData="M21,4h1v16h-1z"/>
+</vector>

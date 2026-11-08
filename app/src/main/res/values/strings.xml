@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">蜉蝣·取件通</string>
+    <!-- 主页左上角标题 = app_name（主名，26f）+ app_title_suffix（后缀）。
+         后缀在 MainActivity.buildHome() 里显式设为 13f / 常规体 / cTextSecondary，与副标题一致。
+         ★ vc328（同志 2026-10-19）：「（非正式版）」后缀删除 —— 置空即不显示，代码路径保留。 -->
+    <string name="app_title_suffix"></string>
+    <string name="bar_taobao">淘宝身份码</string>
+    <string name="bar_taobao_sub">官方 H5 · 首次需页内登录淘宝</string>
+    <string name="bar_pdd">拼多多身份码</string>
+    <string name="bar_pdd_sub">点此绑定自提点（长按可更换站点）</string>
+    <string name="bar_pdd_sub_bound">直达自提点取件页 · 站点 %s（长按更换）</string>
+    <!-- 拼多多取件码：改为纯原生通道（应用内一次性登录，之后零跳转） -->
+    <!-- 拼多多身份码：对齐第1栏「淘宝身份码」的样子 —— 一张大号身份码（条形码）+ 刷新 -->
+    <string name="bar_pdd_code">拼多多身份码</string>
+    <!-- ★★ 2026-09-26：第 2 栏副标题单独出来，专门承担「登录态」提示。
+         原因：拼多多 token 由第三方容器换来、服务端会不定期清扫，客户端无法续期
+         （真机取证见 PddChannel.BROWSER_UA 附近注释与当日工作日志）。
+         ⇒ 「会掉线」是固有性质，能做好的只有**掉了让人一眼看见、一下点回去**。 -->
+    <string name="bar_pdd_sub_ok">点开直开身份码 · 已登录</string>
+    <string name="bar_pdd_sub_need">登录已失效 · 点这里重新登录</string>
+    <string name="bar_pdd_code_sub">点开即见身份码 · 首次需在应用内登录</string>
+    <string name="bar_pdd_code_bound">点开即见身份码 · 已登录拼多多</string>
+    <string name="pdd_id_empty">拼多多暂无待取包裹</string>
+    <string name="pdd_id_empty_hint">有新包裹入站后，身份码会自动出现在这里</string>
+    <string name="pdd_id_hint">出示给驿站工作人员，或对准自助出库机扫码</string>
+    <string name="pdd_id_card_hint">条码扫不出的，报下面这串号码即可</string>
+    <string name="pdd_id_multi">共 %d 个待取包裹</string>
+    <string name="pdd_login_title">登录拼多多</string>
+    <string name="pdd_kicked">拼多多的登录被服务端清掉了（或被你手机上的拼多多 App 顶掉），在这里重新登录一次即可</string>
+    <string name="pdd_login_ok">已获取拼多多登录态，正在拉取取件码…</string>
+    <string name="pdd_login_watch">已登录？正在等待登录态…</string>
+    <string name="pdd_need_login">尚未登录拼多多</string>
+    <string name="pdd_go_login">登录拼多多</string>
+    <string name="pdd_relogin">重新登录</string>
+    <string name="pdd_expired">拼多多登录已失效（可能被手机上的拼多多 App 顶掉，或登录过期），在这里重新登录一次即可</string>
+    <string name="bar_pdd_deeplink_sub">点开直达拼多多 App · 待收货里看取件码</string>
+    <string name="bar_pdd_inapp">App 内直开身份码 · 已登录 %1$s</string>
+    <string name="pdd_app_missing">没有找到拼多多，请先安装拼多多 App</string>
+    <!-- mdkd 身份码页（应用内直开） -->
+    <string name="bar_pdd_mdkd_sub">应用内直开官方身份码 · 长按改跳拼多多App</string>
+    <string name="bar_pdd_mdkd_sub_nologin">应用内直开官方身份码 · 先点右上角登录</string>
+    <string name="mdkd_open_app">在App打开</string>
+    <!-- 快递数据源（设置页）vc326 更名+折叠 -->
+    <string name="settings_sources_section">快递数据源</string>
+    <string name="source_logged_in">已登录 · %1$s</string>
+    <!-- 探不到账号标识时用这一条：**不要拿 cookie 名顶替**（顺丰踩过） -->
+    <string name="source_logged_in_plain">已登录</string>
+    <!-- 数据源退出登录 -->
+    <string name="src_logout_title">退出「%1$s」登录？</string>
+    <string name="src_logout_msg">退出后需要重新登录，才能继续获取该平台的取件码。</string>
+    <string name="src_logout_yes">退出登录</string>
+    <string name="src_logout_done">已退出「%1$s」</string>
+    <string name="source_not_logged_in">未登录 · 点此登录</string>
+    <string name="pdd_login_not_yet">还没检测到拼多多登录，请在页面里完成登录再点「完成」</string>
+    <string name="pickup_pdd_not_login">尚未登录拼多多（点此去设置里登录，可获取拼多多取件码）</string>
+    <string name="pickup_pdd_go_login">去登录</string>
+    <!-- 京东数据源 -->
+    <string name="jd_login_title">京东登录</string>
+    <string name="jd_tag">京东</string>
+    <string name="cainiao_tag">菜鸟</string>
+    <!-- 淘宝数据源 -->
+    <string name="tb_login_title">淘宝登录</string>
+    <string name="tb_login_ok">淘宝登录成功，取件码与身份码都能用了</string>
+    <string name="tb_login_not_yet">还没检测到淘宝登录，请在页面里完成登录再点「完成」</string>
+    <string name="jd_login_ok">京东登录成功，可获取京东取件码</string>
+    <string name="jd_login_not_yet">还没检测到京东登录，请在页面里完成登录再点「完成」</string>
+    <string name="pickup_more_sources">可在设置 →「取件码数据源」里登录拼多多 / 京东，获取更多取件码</string>
+    <string name="pickup_no_source">先到设置 →「取件码数据源」里登录（淘宝 / 拼多多 / 京东），才能获取取件码</string>
+    <string name="pickup_loading_src">正在获取%1$s取件码</string>
+    <!-- 小米数据源 -->
+    <string name="mi_login_title">小米登录</string>
+    <string name="mi_login_ok">小米登录成功（令牌已就绪）</string>
+    <string name="mi_login_not_yet">还没检测到小米登录，请在页面里完成登录</string>
+    <string name="mi_fetching_page">正在获取小米登录页…</string>
+    <string name="mi_page_fail">获取小米登录页失败：%1$s</string>
+    <string name="mi_mint_doing">登录成功，正在换取小米令牌…</string>
+    <string name="mi_mint_fail">小米换票失败：%1$s</string>
+    <string name="mi_more_title">小米数据源说明</string>
+    <string name="mi_capability_note">仅能接入小米商城、小米有品平台物流</string>
+    <string name="sf_more_title">顺丰数据源说明</string>
+    <string name="sf_capability_note">仅能接入顺丰速运的运单物流信息（状态与轨迹）。顺丰不提供取件码，取件码会由短信下发。</string>
+    <string name="sf_login_checking">正在确认顺丰登录态…</string>
+    <string name="sf_login_ok">顺丰登录成功（账号 %1$s）</string>
+    <string name="sf_login_ok_plain">顺丰登录成功</string>
+    <string name="sf_login_not_yet">还没检测到顺丰登录，请在页面里完成手机号登录</string>
+    <!-- 快递100 数据源 -->
+    <string name="kd_more_title">快递100 数据源说明</string>
+<string name="kd_capability_note">开启后按运单号查询完整物流轨迹和预计送达时间，补进「途中快递」；没填官方凭据时走免费通道。</string>
+<string name="kd_capability_warn">⚠️ 不保证一定补到：刚发出、还没被快递公司收录的单号可能暂时查不到，也受快递100 的数据与免费额度影响（关闭则只显示平台自带的最新一条轨迹）。\n\n★ 拼多多的件走「拼多多自己的数据源」，物流信息一定能补全，不受上面限制。</string>
+    <string name="kd_status_on">已启用</string>
+    <string name="kd_status_off">已停用</string>
+    <!-- 途中快递层（第 5 栏） -->
+    <string name="bar_transit_title">途中快递</string>
+    <string name="bar_transit_sub">汇总各平台在途物流 · 点开看轨迹</string>
+    <string name="transit_loading">正在获取在途物流…</string>
+    <string name="transit_empty">暂无在途快递 · 下单后会自动出现在这里</string>
+    <string name="transit_no_source">先到设置 →「取件码数据源」登录后，这里才能看到在途物流</string>
+    <string name="pdd_fetch_fail">拼多多取件码获取失败：%s</string>
+    <string name="pdd_none">拼多多暂无待取件包裹</string>
+    <string name="pdd_tag">拼多多</string>
+    <string name="pdd_done">完成</string>
+    <string name="pdd_checking">正在校验登录态…</string>
+    <!-- 身份码顶栏的登录态开关：已登录显示「清除登录」，未登录显示「登录」 -->
+    <string name="pdd_login_only">登录</string>
+    <string name="pdd_logout_confirm">将清除本机保存的拼多多登录态（含网页 cookie）。淘宝 / 菜鸟的登录不受影响。确定？</string>
+    <string name="pdd_logout_done">已清除拼多多登录</string>
+    <string name="pdd_logout_failed">本地仍残留拼多多登录 cookie，请重试或结束应用后重开</string>
+    <string name="pdd_id_need_login_hint">点右上角「登录」授权拼多多后，身份码会自动出现在这里</string>
+    <!-- 多账号 -->
+    <string name="bar_pdd_code_multi">点开即见身份码 · 已登录 %d 个账号</string>
+    <string name="pickup_scanning_account">正在查询 %1$s 账号 %2$d/%3$d（%4$s）</string>
+    <string name="account_manage">账号管理</string>
+    <string name="settings_accounts_section">账号管理 · 可添加多个账号，取件码会一起汇总</string>
+    <string name="settings_taobao_accounts">淘宝账号</string>
+    <string name="settings_pdd_accounts">拼多多账号</string>
+    <string name="account_add">+ 添加账号</string>
+    <string name="account_delete">删除</string>
+    <string name="account_primary_tag">主账号</string>
+    <string name="account_set_primary">设为主账号</string>
+    <string name="account_relink">重新登录</string>
+    <string name="account_relink_tip">在接下来的页面里点「登录」用这个账号一键登录，完成后返回，App 会自动更新该账号的登录信息</string>
+    <string name="account_set_primary_tip">已设为身份码栏的默认账号。淘宝同一时间只有一个账号在线，若打开身份码提示登录，点这个账号的「重新登录」一键确认即可</string>
+    <string name="account_empty">还没有添加账号</string>
+    <string name="account_delete_confirm">删除账号「%s」？该账号保存在本机的登录信息会被清除。</string>
+    <string name="account_logout_all">全部退出并清空</string>
+    <string name="account_logout_all_confirm">将删除该平台的全部账号，并清除本机保存的登录信息。确定？</string>
+    <string name="account_add_taobao_tip">接下来会先清掉本机的淘宝登录（避免多账号互相覆盖），再打开淘宝登录页。用要添加的那个账号登录，完成后会自动保存。</string>
+    <string name="account_add_pdd_tip">接下来会先清掉本机的拼多多登录（避免多账号互相覆盖），再打开拼多多登录页。用要添加的那个账号登录，完成后会自动保存。</string>
+    <string name="cainiao_account_expired">淘宝账号登录已过期</string>
+    <string name="account_added">已添加账号：%s</string>
+    <string name="account_removed">已删除账号：%s</string>
+    <string name="account_label_taobao">淘宝 %s</string>
+    <string name="account_label_pdd">拼多多 %s</string>
+    <string name="account_add_failed">没识别到新的登录态，请确认已在页面里登录成功后再试</string>
+    <string name="account_waiting_login">等待登录完成…</string>
+    <string name="account_expired">%s（登录已过期）</string>
+    <string name="pickup_src_all">全部来源</string>
+    <string name="pickup_src_pdd">拼多多</string>
+    <string name="bar_cainiao">菜鸟身份码</string>
+    <string name="bar_cainiao_sub">裹裹授权页 · 共用淘宝登录态</string>
+    <string name="bar_pickup">取件码</string>
+    <string name="bar_pickup_sub">驿站待取包裹 · 点开即看</string>
+    <string name="bar_pickup_sub_count">%1$d 个待取 · 更新于 %2$s</string>
+    <string name="pickup_title">取件码</string>
+    <string name="pickup_loading">正在获取待取包裹…</string>
+    <string name="pickup_empty">暂无取件码</string>
+    <string name="pickup_empty_hint">有新包裹入站后，取件码会自动出现在这里</string>
+    <string name="pickup_error">获取失败：%s\n点右上角 ⟳ 重试</string>
+    <string name="pickup_need_login">尚未登录淘宝账号\n请先在「淘宝身份码」栏登录后重试</string>
+    <string name="pickup_copied">取件码已复制：%s</string>
+    <string name="pickup_go_login">去登录</string>
+    <string name="pickup_open_web">打开身份码页登录</string>
+    <string name="web_title">淘宝身份码</string>
+    <string name="web_title_cainiao">菜鸟身份码</string>
+    <string name="btn_back">‹ 返回</string>
+    <string name="btn_logout">清除登录</string>
+    <string name="logout_confirm">将清除本应用内保存的网页登录状态（cookie），下次使用需重新登录。确定？</string>
+    <string name="logout_done">已清除登录</string>
+    <string name="loading">刷新中…</string>
+    <string name="pdd_setup_title">绑定多多自提点</string>
+    <string name="pdd_setup_msg">到驿站后，用微信/浏览器扫描墙上或出库机旁的"多多取件"二维码，把打开的完整网址（形如 https://mdkd.pinduoduo.com/weixin/package?station_code=…）粘贴到下面，保存后即可一键直达该站点的取件/身份码页。</string>
+    <string name="pdd_input_hint">粘贴网址或直接输入 station_code</string>
+    <string name="pdd_input_invalid">没识别出 station_code，请检查粘贴内容</string>
+    <string name="pdd_saved">已绑定站点 %s，长按横栏可更换</string>
+    <string name="pdd_skip">暂不绑定，仅打开App</string>
+    <string name="pdd_not_installed">未安装拼多多，请先安装后再试</string>
+    <!-- 桌面小组件：3×2，内部 3 列 × 2 行共 6 格 -->
+    <!-- 桌面小组件（vc289：4 个组件，替换旧 3×2） -->
+    <string name="widget_p2_name">取件码 · 2×2</string>
+    <string name="widget_p2_desc">最多显示 4 个待取快递的取件码</string>
+    <string name="widget_p4_name">取件码 · 4×2</string>
+    <string name="widget_p4_desc">最多显示 8 个待取快递的取件码</string>
+    <string name="widget_t2_name">途中快递 · 2×2</string>
+    <string name="widget_t2_desc">显示最新一条物流动态与在途件数</string>
+    <string name="widget_t4_name">途中快递 · 4×2</string>
+    <string name="widget_t4_desc">显示最新两条物流动态与在途件数</string>
+    <!-- 鲸鱼娘小组件（vc296） -->
+    <string name="whale_w2_name">鲸鱼娘 · 2×2</string>
+    <string name="whale_w4_name">鲸鱼娘 · 4×2</string>
+    <string name="whale_widget_desc">点一下她会说话，双击打开取件码</string>
+    <string name="whale_name">鲸鱼娘</string>
+    <string name="whale_def_say">在开始复杂深度推理之前，先来一碗热乎乎的白米饭！</string>
+    <string name="whale_def_info">点人家一下嘛～</string>
+    <string name="whale_xml_def_say">人家在看着快递哦</string>
+    <string name="whale_xml_def_info">双击人家打开取件码</string>
+    <string name="cd_settings">设置</string>
+    <string name="settings_title">设置</string>
+    <string name="settings_theme_section">深色模式</string>
+    <string name="settings_follow_system">跟随系统深浅色</string>
+    <string name="settings_scheduled">定时切换深色</string>
+    <string name="settings_dark_start">深色开始</string>
+    <string name="settings_dark_end">深色结束</string>
+    <string name="settings_scheduled_hint">设定时段内使用深色，其余时间浅色；支持跨零点时段</string>
+</resources>

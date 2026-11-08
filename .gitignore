@@ -1,0 +1,19 @@
+# 构建产物
+build/
+.gradle/
+*.apk
+*.aab
+
+# 本机配置
+local.properties
+.idea/
+*.iml
+
+# 签名相关，绝对不能传
+*.jks
+*.keystore
+keystore.properties
+
+# 抓包 / 调试落盘
+*.log
+captures/

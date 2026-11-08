@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 小组件背景材质①：深色渐变卡片（默认）。借鉴南风天气的渐变底。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <gradient
+        android:angle="270"
+        android:startColor="#FF30323A"
+        android:endColor="#FF17181C" />
+    <corners android:radius="18dp" />
+</shape>

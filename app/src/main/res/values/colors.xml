@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#FF3CA1DD</color>
+
+    <!-- ================= 鲸鱼娘小组件双套色（vc296） =================
+         浅色模式：奶油白面板 + 深色文字（贴合贴纸风的暖白）
+         深色模式：夜海蓝面板 + 浅色文字（见 values-night/colors.xml）
+         launcher 以自身配置解析 RemoteViews 布局资源 ⇒ 系统切深浅色时组件自动跟着换。 -->
+    <color name="wk_panel">#FAEEDA</color>
+    <color name="wk_panel_edge">#BA7517</color>
+    <color name="wk_text">#412402</color>
+    <color name="wk_text_dim">#714710</color>
+    <color name="wk_accent">#185FA5</color>
+
+    <!-- vc297：整幅铺满后，气泡是浮在立绘上的一层，用半透明避免"分割画面" -->
+    <color name="wk_bubble">#E8FFFFFF</color>
+    <color name="wk_bubble_edge">#8085B7EB</color>
+
+    <!-- vc299：右下角在途件数徽标 —— 蓝底，**60% 不透明度**（0x99 = 153/255 ≈ 0.6） -->
+    <color name="wk_badge">#991E6FBF</color>
+</resources>

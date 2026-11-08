@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  在途件数徽标底（vc299）：**60% 不透明度的实心圆**（同志 10-17 要求「角标太大了再缩小一些
+  并角标把透明度调整为百分之六十」）。
+  · 直径由布局给（vc299：22dp → 16dp）。
+  · 底色 @color/wk_badge 本身已带 #99 alpha 前缀（60% ≈ 0x99/0xFF = 0.6）。
+  · 白描边同步降到 60% 透明度，保证"淡淡挂在角上、不抢眼但看得清"。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="@color/wk_badge" />
+    <stroke android:width="0.6dp" android:color="#66FFFFFF" />
+</shape>

@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  鲸鱼娘小组件 4×2（vc298 fix1）：分割式 —— 左侧对话框面板 + 右侧立绘。
+
+  ★ 同志 10-17 ②：「把4×2改回分割加对话框样式，2×2不做修改」
+  ★ 同志 10-17 ①：「现在取消GIF动图，全部更改为静态图」
+  ★ 同志 10-17 ③：右下角在途件数徽标（圆 22dp 蓝底白字，仅在途件 > 0 时显示）
+
+  ⚠️⚠️ 本文件是「载入窗口小部件时出现问题」的修复版，两条铁律：
+    1. **RemoteViews 不支持裸 <View> 标签**（也不支持 <merge>/<include>）。
+       曾经为了做"整幅点击区"放了一个 <View android:id="@+id/wk_touch">，
+       直接导致 InflateException ⇒ 桌面报"载入窗口小部件时出现问题"。
+       ⇒ 点击一律挂在 root（@id/wk_root），不要再加裸 View。
+    2. **只允许白名单控件**：FrameLayout / LinearLayout / RelativeLayout(部分) /
+       GridLayout / TextView / ImageView / Button / ProgressBar / ViewStub 等。
+       自定义 View、SurfaceView、裸 View 一律不行。
+
+  结构（全部是白名单控件）：
+    [ 左 62%                 ][ 右 38% ]
+      鲸鱼名（小字，accent）
+      台词 wk_say（常驻）
+      快递信息 wk_info（有码时显示）
+                             [立绘 铺满]
+                                        [徽标 右下]
+
+  · 面板底色/文字走 values / values-night 双套色。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/wk_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="horizontal">
+
+        <!-- ============ 左侧：对话框面板（62% 宽） ============ -->
+        <LinearLayout
+            android:id="@+id/wk_panel"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1.62"
+            android:layout_margin="6dp"
+            android:orientation="vertical"
+            android:gravity="center_vertical"
+            android:background="@drawable/wk_panel_bg"
+            android:paddingLeft="12dp"
+            android:paddingRight="12dp"
+            android:paddingTop="10dp"
+            android:paddingBottom="10dp">
+
+            <!-- 装扮名：vc300 同志要求「这个装扮一删掉」⇒ 0dp 占位（代码仍会 setViewText，保留防 NPE） -->
+            <TextView
+                android:id="@+id/wk_name"
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:visibility="gone" />
+
+            <!-- 台词（分割式下常驻显示）。
+                 ★ vc300：同志要求「字体放大一点」⇒ 12.5sp → 15sp，行距同步放宽 -->
+            <TextView
+                android:id="@+id/wk_say"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/whale_xml_def_say"
+                android:textColor="@color/wk_text"
+                android:textSize="15sp"
+                android:lineSpacingExtra="4dp"
+                android:maxLines="4"
+                android:ellipsize="end" />
+
+            <!-- 快递信息（有取件码时显示，如「6-1-3039（还剩 2 个）」） -->
+            <TextView
+                android:id="@+id/wk_info"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="@string/whale_xml_def_info"
+                android:textColor="@color/wk_accent"
+                android:textSize="12.5sp"
+                android:textStyle="bold"
+                android:maxLines="2"
+                android:ellipsize="end"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <!-- ============ 右侧：鲸鱼娘立绘（38% 宽） ============ -->
+        <FrameLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1">
+
+            <ImageView
+                android:id="@+id/wk_char"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:scaleType="fitCenter"
+                android:src="@drawable/whale_study"
+                android:contentDescription="@string/whale_name" />
+
+            <!-- 右下角在途件数徽标：圆 16dp，蓝底 60% 不透明 -->
+            <TextView
+                android:id="@+id/wk_transit_badge"
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:layout_gravity="bottom|right"
+                android:layout_marginRight="3dp"
+                android:layout_marginBottom="3dp"
+                android:background="@drawable/wk_badge_bg"
+                android:gravity="center"
+                android:textColor="#E6FFFFFF"
+                android:textSize="9sp"
+                android:textStyle="bold"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:visibility="gone" />
+        </FrameLayout>
+    </LinearLayout>
+
+    <!-- 兼容占位：代码仍会对 wk_bubble 做 setViewVisibility(GONE)，用一个空 TextView 占位防 NPE。
+         （4×2 分割式不再使用浮动气泡，台词写在左侧面板里） -->
+    <TextView
+        android:id="@+id/wk_bubble"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:visibility="gone" />
+</FrameLayout>

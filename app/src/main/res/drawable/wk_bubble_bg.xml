@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  鲸鱼娘台词气泡（vc297）：半透明圆角框，浮在整幅立绘之上。
+  · 底色走 @color/wk_bubble，深浅色双套（浅色=半透明白、深色=半透明夜蓝）。
+  · 描边走 @color/wk_bubble_edge。
+  · 半透明是为了"不分割画面"——同志的诉求是整幅鲸鱼娘，气泡只是浮在图上的一层。
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/wk_bubble" />
+            <corners android:radius="13dp" />
+            <stroke android:width="1.2dp" android:color="@color/wk_bubble_edge" />
+        </shape>
+    </item>
+</layer-list>

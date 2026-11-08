@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 途中快递小组件 2×2：110×110dp -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="110dp"
+    android:minHeight="110dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="2"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/widget_transit_2x2"
+    android:previewLayout="@layout/widget_preview_2x2"
+    android:description="@string/widget_t2_desc"
+    android:resizeMode="none"
+    android:widgetCategory="home_screen" />

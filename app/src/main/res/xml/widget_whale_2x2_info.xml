@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 鲸鱼娘小组件 2×2：110×110dp，updatePeriodMillis=0（由轮询驱动刷新） -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="110dp"
+    android:minHeight="110dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="2"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/widget_whale_2x2"
+    android:description="@string/whale_widget_desc"
+    android:resizeMode="none"
+    android:widgetCategory="home_screen" />

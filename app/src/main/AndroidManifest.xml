@@ -1,0 +1,293 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 后台快递跟踪：有新物流动态时发通知。Android 13+ 需运行时申请（设置页里引导） -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+        取件码上「流体云 / 状态栏实况位」。
+        ★ 这是 Android 16（API 36）「提升型常驻通知 / Live Update」要求的**非运行时权限**：
+          声明即可，不需要弹窗申请，也不需要任何 OPPO SDK 或推送服务。
+          ColorOS 的流体云、Flyme 的灵动岛承载的都是这类通知。
+          老设备（<16）读不懂这个权限，系统直接忽略，无害。
+    -->
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
+
+    <!--
+        ★ 曲线救国（2026-10-12）：开机后把「兜底闹钟 + 周期任务」重新布置上。
+          普通权限，声明即可，不需要用户授权，也不要求 Shizuku/root。
+          没有它的话，重启一次后台轮询就再也回不来了（要用户手动开一次 App）。
+    -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- 精确闹钟（vc263）：ColorOS 实测非精确闹钟会被推迟约 72 小时。
+         SCHEDULE_EXACT_ALARM 在 Android 14+ 需用户手动授予（会降级）；
+         USE_EXACT_ALARM 安装即得、用户零操作，专为闹钟/提醒类核心功能设计，
+         本应用的后台轮询提醒属此列。两者都声明，取能用的那个。 -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+
+    <!--
+        ★★★ 常驻前台服务（vc264）：抬进程优先级，扛"一键清理"和"从最近任务划掉"。
+        Android 14+ 必须声明服务类型；本应用属于"快递跟踪提醒"这一类，
+        用 specialUse（它没有 dataSync 那种每日时长上限），并如实填写用途说明。
+        配的通知是 IMPORTANCE_LOW + ongoing：不响铃不弹窗，只在通知栏安静地待着。
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!-- Shizuku（可选增强）：没装时全部逻辑静默降级，不影响任何基本功能 -->
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
+
+    <application
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:theme="@style/AppTheme"
+        android:hardwareAccelerated="true"
+        android:usesCleartextTraffic="false"
+        android:supportsRtl="true">
+
+        <!--
+            ★ android:enableOnBackInvokedCallback="true" —— 打开**预测性返回手势**。
+              开了它，Android 13+（尤其 16）在侧滑返回时会**边拖边回调 onBackProgressed**，
+              我们据此做「跟手动画」（酷安那种）。
+            ⚠️ 代价：开了之后 **API 33+ 不再调用 onBackPressed()** ——
+              本项目所有层的返回逻辑原本都挂在那儿，必须一并迁到 OnBackInvokedCallback，
+              否则侧滑会直接退出 App！
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:enableOnBackInvokedCallback="true"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            桌面小组件（vc289，替换旧 3×2 取件码组件）：
+            取件码 2×2 / 4×2 + 途中快递 2×2 / 4×2，渲染与数据统一在 HomeWidgets。
+            updatePeriodMillis=0：组件不自己联网，App/后台轮询拉完数据主动推（HomeWidgets.updateAll）。
+        -->
+        <receiver
+            android:name=".PickupWidget2x2"
+            android:exported="false"
+            android:label="@string/widget_p2_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_p2_info" />
+        </receiver>
+        <receiver
+            android:name=".PickupWidget4x2"
+            android:exported="false"
+            android:label="@string/widget_p4_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_p4_info" />
+        </receiver>
+        <receiver
+            android:name=".TransitWidget2x2"
+            android:exported="false"
+            android:label="@string/widget_t2_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_t2_info" />
+        </receiver>
+        <receiver
+            android:name=".TransitWidget4x2"
+            android:exported="false"
+            android:label="@string/widget_t4_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_t4_info" />
+        </receiver>
+
+        <!-- 鲸鱼娘小组件（vc296）：2×2 贴纸免背景 + 4×2 左侧台词面板 -->
+        <receiver
+            android:name=".WhaleWidget2x2"
+            android:exported="false"
+            android:label="@string/whale_w2_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_whale_2x2_info" />
+        </receiver>
+        <receiver
+            android:name=".WhaleWidget4x2"
+            android:exported="false"
+            android:label="@string/whale_w4_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_whale_4x2_info" />
+        </receiver>
+        <!-- 鲸鱼娘点击接收器：单击冒气泡 / 双击开取件码页（自己计时判定） -->
+        <receiver
+            android:name=".WhaleTapReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.agent.idcode.WHALE_TAP" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+            ★★★ 兜底唤醒（2026-10-12）：闹钟 + 豁免广播的统一入口。
+            背景：ColorOS 上"上滑划掉"会把 JobScheduler 里的周期任务撤掉（实测），
+            本 receiver 负责在**任意一次唤醒**里把任务补回来。详见 KeepAlive.kt。
+
+            ⚠️ 这里只注册 **Android 官方仍豁免的隐式广播**（见 developer.android.com
+               "Implicit broadcast exceptions"）。**绝对不要**加 ACTION_POWER_CONNECTED /
+               ACTION_PACKAGE_REPLACED 之类 —— 它们已不在豁免名单，加了也收不到。
+            exported 必须 true：这些广播由系统（不同 UID）发出。
+        -->
+        <receiver
+            android:name=".KeepAliveReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.agent.idcode.action.KEEPALIVE" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.LOCALE_CHANGED" />
+                <action android:name="android.app.action.NEXT_ALARM_CLOCK_CHANGED" />
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+                <action android:name="android.hardware.usb.action.USB_DEVICE_DETACHED" />
+                <action android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED" />
+                <action android:name="android.hardware.usb.action.USB_ACCESSORY_DETACHED" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+            ★★★ 常驻前台服务（vc264，手册第 1 层）
+            低打扰常驻通知 + startForeground ⇒ 扛一键清理、扛从最近任务划掉。
+            exported=false：只有本应用能启动它。
+        -->
+        <service
+            android:name=".KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="后台跟踪快递动态，有派件或到件变化时通知用户" />
+        </service>
+
+        <!--
+            ★★★ 复活接收器（手册 3.4）
+            exported=true 才收得到看门人（shell/root）发来的 am broadcast；
+            用 android.permission.DUMP 保护 ⇒ 普通 App 拿不到 DUMP，发的广播在投递前就被拦掉。
+            进来后还要过令牌校验 + 自限制（息屏/强制停止/熔断），详见 KeepAliveRecoveryReceiver。
+        -->
+        <receiver
+            android:name=".KeepAliveRecoveryReceiver"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="com.agent.idcode.action.RECOVER_SERVICE" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+            ★★★ 系统绑定型服务（手册第 3 层）
+            由系统亲自绑定 ⇒ 进程优先级高一档，且死了系统会自动重绑。
+            顺带还能从菜鸟/微信/快递 App 的通知里白捡取件码（详见 IdNotifyListener）。
+            需要用户在系统设置里开「通知使用权」，没开时只是少了这一层，不影响其它功能。
+        -->
+        <service
+            android:name=".IdNotifyListener"
+            android:exported="true"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!--
+            ★★★ 控制中心快捷磁贴（同志 10-15 提出）
+            SystemUI 绑定 ⇒ 又一条系统绑定型路径；用户点一下 = 合法唤醒进程。
+            ACTIVE_TILE：Android 13+ 活跃磁贴，系统会保持绑定并在进程死后重绑。
+        -->
+        <service
+            android:name=".IdQuickTile"
+            android:exported="true"
+            android:icon="@drawable/ic_qs_tile"
+            android:label="快递跟踪"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.ACTIVE_TILE"
+                android:value="true" />
+        </service>
+
+        <!-- Shizuku Provider（可选增强用，没装 Shizuku 不会有人来连它） -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
+        <meta-data
+            android:name="moe.shizuku.client.V3_SUPPORT"
+            android:value="true" />
+
+        <!--
+            ★★★ Stellar（同志 10-15 要求，与 Shizuku 并存）
+            Stellar 是 Shizuku 的深度定制分支（roro2239/Stellar），机制同源。
+            同志手机上只装了 Stellar ⇒ 原生适配它。两个框架各走各的路径，
+            设置了哪个用哪个，都没装则全部静默降级（不影响任何基本功能）。
+            权限用 meta-data 声明（Stellar 的规矩，不是 uses-permission）：
+              stellar = 基础 API 访问；follow_stellar_startup = Stellar 服务启动时跟随拉起
+        -->
+        <provider
+            android:name="roro.stellar.StellarProvider"
+            android:authorities="${applicationId}.stellar"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
+        <meta-data
+            android:name="roro.stellar.permissions"
+            android:value="stellar,follow_stellar_startup" />
+        <!--
+            ★ vc321 超级岛「已完成」按钮回调（HyperOS 焦点通知 miui.focus.actions）
+            exported=false：只有自家通知里的 PendingIntent 能触发。
+        -->
+        <receiver
+            android:name=".IslandActionReceiver"
+            android:exported="false" />
+            <receiver
+            android:name=".LiveDismissReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.agent.idcode.LIVE_DISMISS" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

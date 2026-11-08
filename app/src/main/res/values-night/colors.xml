@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ============ 鲸鱼娘小组件双套色 · 深色模式（vc296） ============
+         系统切深色模式时，launcher 按自身配置解析组件布局资源 ⇒ 自动取这里的值。
+         夜海蓝面板 + 浅色文字，与鲸鱼/深海的蓝基因一致。 -->
+    <color name="wk_panel">#26215C</color>
+    <color name="wk_panel_edge">#534AB7</color>
+    <color name="wk_text">#EEEDFE</color>
+    <color name="wk_text_dim">#AFA9EC</color>
+    <color name="wk_accent">#85B7EB</color>
+
+    <!-- vc297：深色模式下气泡是半透明深蓝，浮在立绘上不刺眼 -->
+    <color name="wk_bubble">#E6242A52</color>
+    <color name="wk_bubble_edge">#80534AB7</color>
+
+    <!-- vc299：深色模式下徽标用更亮的蓝，同样 **60% 不透明度** -->
+    <color name="wk_badge">#992E86DE</color>
+</resources>

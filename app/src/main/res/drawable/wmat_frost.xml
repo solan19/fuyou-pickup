@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 小组件背景材质②：磨砂玻璃（浅色半透明，模拟毛玻璃观感；此材质下文字换深色） -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="#D9F2F3F5" />
+    <corners android:radius="18dp" />
+    <stroke android:width="1dp" android:color="#59FFFFFF" />
+</shape>

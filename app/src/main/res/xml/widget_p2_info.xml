@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 取件码小组件 2×2：minWidth/minHeight 按官方公式 (70×格数)-30 ⇒ 110×110dp -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="110dp"
+    android:minHeight="110dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="2"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/widget_pickup_2x2"
+    android:previewLayout="@layout/widget_preview_2x2"
+    android:description="@string/widget_p2_desc"
+    android:resizeMode="none"
+    android:widgetCategory="home_screen" />
