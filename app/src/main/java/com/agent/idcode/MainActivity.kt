@@ -1111,6 +1111,9 @@ class MainActivity : Activity() {
             } catch (t: Throwable) { SafeRun.w("MainActivity", t) }
         }
         Regex("预计\\s*(今天|明天|后天)").find(latest)?.let { return "预计${it.groupValues[1]}送达" }
+        if (status.contains("派送") || status.contains("配送")) return "即将送达"
+        return "在途中"
+    }
 
     /**
      * ★ vc692：途中卡「预计到达」文案 —— **只在真有依据时返回非空**。
@@ -1168,9 +1171,6 @@ class MainActivity : Activity() {
     } catch (t: Throwable) {
         SafeRun.w("MainActivity", t)
         null
-    }
-        if (status.contains("派送") || status.contains("配送")) return "即将送达"
-        return "在途中"
     }
 
     /**
@@ -3309,6 +3309,8 @@ class MainActivity : Activity() {
         }
         // ★ vc637：跨源同码去重回归自测，覆盖“一个源缺站点”的真实异常形态。
         if (intent?.getBooleanExtra("debug_dedup_selftest", false) == true) selfTestDedup()
+        // ★ vc693：一键自检（也可从「设置」页点「运行自检」）
+        if (intent?.getBooleanExtra("debug_self_test", false) == true) showSelfTestDialog()
         // ★★ vc604：**一条命令清掉所有调试残留**（testTransit / 轨迹缓存 / 取件码 / 桌面组件 / 在途缓存）
         //   交付前必跑；同志报"用户到手还带假数据"，根因就是以前只能一条条清、容易漏。
         if (intent?.getBooleanExtra("debug_purge_all", false) == true) {
@@ -10582,6 +10584,31 @@ class MainActivity : Activity() {
         fun addCard(c: View) = outer.addView(c, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { bottomMargin = (16 * dp).toInt() })
+        // ★ vc693：自检卡 —— 各项功能是否正常一眼可见，还能模拟一条取件码通知。
+        run {
+            val card = linearCard().apply { orientation = LinearLayout.VERTICAL }
+            card.addView(TextView(this).apply {
+                text = "自检"
+                textSize = UiTok.T15
+                typeface = tfMedium
+                setTextColor(cTextPrimary)
+            })
+            card.addView(TextView(this).apply {
+                text = "检查通知使用权、各平台登录态、取件码与在途缓存、后台轮询，"
+                textSize = UiTok.T12
+                setTextColor(cTextSecondary)
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (4 * dp).toInt() })
+            val runBtn = chip("运行自检", "#5E6AD2")
+            runBtn.isClickable = true
+            runBtn.setOnClickListener { showSelfTestDialog() }
+            card.addView(runBtn, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (10 * dp).toInt() })
+            addCard(card)
+        }
+
 
         // ★ vc327：分类折叠公共件（「深色模式」「快递数据源」两张卡共用）
         //   高度动画：收起 0 ← 满高，展开 0 → 满高（DecelerateInterpolator，220ms），
@@ -14830,6 +14857,118 @@ class MainActivity : Activity() {
             mainHandler.post { runCatching { rebuildHome() } }
         } catch (t: Throwable) {
             SafeRun.w("MainActivity", t)
+        }
+    }
+    /**
+     * ★ vc693：**一键自检** —— 把「这个软件现在还能不能用」摊成一张清单。
+     *
+     * 全部是**只读**检查（不发网络请求、不改缓存），失败项也能看出是"没授权"还是"真坏了"。
+     */
+    private fun runSelfTest(): String {
+        val sb = StringBuilder()
+        fun line(ok: Boolean?, name: String, detail: String) {
+            val mark = when (ok) {
+                true -> "✅"
+                false -> "❌"
+                else -> "•"
+            }
+            sb.append(mark).append(' ').append(name)
+            if (detail.isNotEmpty()) sb.append("：").append(detail)
+            sb.append('\n')
+        }
+        // 通知使用权（通知取件码那条链的前提）
+        try {
+            val enabled = android.provider.Settings.Secure.getString(
+                contentResolver, "enabled_notification_listeners"
+            ).orEmpty()
+            val on = enabled.contains(packageName)
+            line(on, "通知使用权", if (on) "已开启" else "未开启（通知里的取件码抓不到）")
+        } catch (t: Throwable) {
+            line(null, "通知使用权", "读取失败：${t.message}")
+        }
+        // 各平台登录态
+        val pdd = try { PddChannel.isLoggedIn(this) } catch (t: Throwable) { false }
+        val tb = try { TbChannel.isLoggedIn() } catch (t: Throwable) { false }
+        val jd = try { JdChannel.isLoggedIn(this) } catch (t: Throwable) { false }
+        val mi = try { MiChannel.isLoggedIn(this) } catch (t: Throwable) { false }
+        line(pdd, "拼多多", if (pdd) "已登录" else "未登录")
+        line(tb, "淘宝/菜鸟", if (tb) "已登录" else "未登录")
+        line(jd, "京东", if (jd) "已登录" else "未登录")
+        line(mi, "小米", if (mi) "已登录" else "未登录")
+        // 取件码缓存（含通知来源与手动打标）
+        try {
+            val codes = PddCodeStore.all(this)
+            val pendingN = codes.values.count { !PddCodeStore.isPicked(it) }
+            val ntfN = codes.values.count { it.src == "ntf" }
+            val ntfPicked = codes.values.count { it.src == "ntf" && PddCodeStore.isPicked(it) }
+            line(codes.isNotEmpty(), "取件码缓存",
+                "共 ${codes.size} 条，待取 $pendingN 条；通知来源 $ntfN 条（其中已标已取 $ntfPicked）")
+        } catch (t: Throwable) {
+            line(null, "取件码缓存", "读取失败：${t.message}")
+        }
+        // 在途缓存（这次新加的"按源回灌 + 退出落盘"就看这一行）
+        try {
+            val snap = ExpressStore.load(this)
+            val f = transitCacheFile()
+            val last = getSharedPreferences(PREFS, MODE_PRIVATE)
+                .getString(KEY_LAST_TRANSIT_TIME, "").orEmpty()
+            val fmtd = if (f.exists()) java.text.SimpleDateFormat(
+                "MM-dd HH:mm", java.util.Locale.CHINA
+            ).format(java.util.Date(f.lastModified())) else "无"
+            line(f.exists(), "在途缓存",
+                "快照 ${snap.size} 条；文件 ${f.length() / 1024}KB（写入于 $fmtd）；上次更新 $last")
+        } catch (t: Throwable) {
+            line(null, "在途缓存", "读取失败：${t.message}")
+        }
+        // 后台轮询
+        val iv = ExpressStore.pollIntervalMin(this)
+        line(iv > 0, "后台轮询", if (iv > 0) "每 $iv 分钟" else "已关闭（不会自动刷新）")
+        // 预计到达时间解析（本次新增）
+        val etaSample = etaForCard("运输中 预计明天送达", "", "运输中")
+        val etaSample2 = etaForCard("", "", "派送中")
+        line(etaSample.isNotEmpty(), "预计到达解析",
+            "「预计明天送达」→「$etaSample」；派送态→「$etaSample2」")
+        // 通知抠码解析（纯解析，不写缓存）
+        val sample = "您的快件已到菜鸟驿站，取件码 8-3-2201，请及时领取"
+        val got = IdNotifyListener.pickCode(sample)
+        line(got == "8-3-2201", "通知抠码解析",
+            if (got == "8-3-2201") "样例抠出 $got" else "样例只抠出「$got」（解析规则可能已失效）")
+        return sb.toString().trim()
+    }
+
+    /** ★ vc693：自检结果弹窗（只读清单 + 一个「模拟一条取件码通知」按钮） */
+    private fun showSelfTestDialog() {
+        try {
+            android.app.AlertDialog.Builder(this)
+                .setTitle("自检")
+                .setMessage(runSelfTest())
+                .setNeutralButton("模拟一条取件码通知") { _, _ -> simulatePickupNotification() }
+                .setPositiveButton("关闭", null)
+                .showAnimated()
+        } catch (t: Throwable) {
+            appToast(this, "自检失败：${t.message}")
+        }
+    }
+
+    /**
+     * ★ vc693：**模拟一条取件码通知** —— 直接走通知监听那条链
+     * （looksLikeExpress → pickCode → persistCodeFrom 的冲突判定 → 写缓存）。
+     *
+     * 用来验证「通知里有码就写入」这条功能，不必真等一条快递通知。
+     * 刻意用**不重复**的样例码，避免第二次点就被"一致则丢弃"挡掉、看起来像失败。
+     */
+    private fun simulatePickupNotification() {
+        try {
+            val tail = (System.currentTimeMillis() % 9000 + 1000).toString()
+            val sample = "您的快件已放至菜鸟驿站，取件码 9-2-$tail，请凭码取件"
+            val code = IdNotifyListener.pickCode(sample)
+            val r = IdNotifyListener.persistCodeFrom(this, sample, code)
+            Log.i("NtfCode", "模拟通知：$r")
+            appToast(this, r)
+            if (pickupLayer != null) renderMerged()
+            mainHandler.post { runCatching { rebuildHome() } }
+        } catch (t: Throwable) {
+            appToast(this, "模拟失败：${t.message}")
         }
     }
     private fun chip(text: String, colorHex: String): TextView = TextView(this).apply {
