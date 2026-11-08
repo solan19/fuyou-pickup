@@ -2080,14 +2080,32 @@ class MainActivity : Activity() {
                 }
                 etaForCard(latest, pkg.optString("traceLines"), status)
                     .takeIf { it.isNotEmpty() }?.let { bits.add(it) }
+                val waybillForCopy = wbReal.ifEmpty { wbNo }
                 if (bits.isNotEmpty()) {
-                    head.addView(TextView(this).apply {
+                    val infoTv = TextView(this).apply {
                         text = bits.joinToString(" · ")
                         textSize = UiTok.T12
                         setTextColor(cTextSecondary)
                         maxLines = 1
                         ellipsize = android.text.TextUtils.TruncateAt.END
-                    }, LinearLayout.LayoutParams(
+                    }
+                    val infoRow = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        addView(infoTv, LinearLayout.LayoutParams(
+                            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+                        ))
+                        // ★ vc694：物流单号复制按钮（用户要求：单号旁边给个复制键）
+                        if (waybillForCopy.isNotEmpty()) {
+                            val cpBtn = chip("复制单号", "#5E6AD2")
+                            cpBtn.isClickable = true
+                            cpBtn.setOnClickListener { copyWaybill(waybillForCopy) }
+                            addView(cpBtn, LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                            ).apply { leftMargin = (8 * dp).toInt() })
+                        }
+                    }
+                    head.addView(infoRow, LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
                     ).apply { topMargin = (4 * dp).toInt() })
                 }
@@ -14969,6 +14987,18 @@ class MainActivity : Activity() {
             mainHandler.post { runCatching { rebuildHome() } }
         } catch (t: Throwable) {
             appToast(this, "模拟失败：${t.message}")
+        }
+    }
+    /** ★ vc694：复制物流单号到剪贴板（用户要求：物流单号旁边给个复制按钮） */
+    private fun copyWaybill(no: String) {
+        if (no.isBlank()) return
+        try {
+            val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("waybill", no))
+            appToast(this, "已复制单号 $no")
+        } catch (t: Throwable) {
+            SafeRun.w("MainActivity", t)
+            appToast(this, "复制失败：${t.message}")
         }
     }
     private fun chip(text: String, colorHex: String): TextView = TextView(this).apply {
