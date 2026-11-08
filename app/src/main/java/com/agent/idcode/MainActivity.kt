@@ -299,9 +299,11 @@ class MainActivity : Activity() {
             setTextColor(cTextSecondary)
             setPadding((16 * dp).toInt(), (12 * dp).toInt(), (16 * dp).toInt(), 0)
         }
-        layer.addView(status, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ))
+        // ★ vc695：平台页标签条（全部 / 拼多多 / 淘宝 / 京东 / 小米 / 手动）
+        buildTransitTabs(layer)
+
+        val scroll = ScrollView(this)
+        val list = LinearLayout(this).apply {
 
         val scroll = ScrollView(this)
         val list = LinearLayout(this).apply {
@@ -311,6 +313,8 @@ class MainActivity : Activity() {
             setPadding((10 * dp).toInt(), (12 * dp).toInt(), (10 * dp).toInt(), (24 * dp).toInt())
         }
         scroll.addView(list)
+        // ★ vc695：左右滑动切平台页（返回 false ⇒ 不影响原有的点击与纵向滚动）
+        attachTransitSwipe(scroll)
         // ★ vc264m：下拉松手刷新（SwipeRefreshLayout 包住 ScrollView）。
         //   触发调 fetchInTransit(force=true)——与顶栏刷新按钮同一入口（用户明确意图，穿透 90 秒闸）
         val swipe = androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this).apply {
@@ -1127,16 +1131,24 @@ class MainActivity : Activity() {
      */
     private fun etaForCard(latest: String, traceLines: String, status: String): String {
         val pool = listOf(latest, status, traceLines).joinToString(" ")
-        Regex("预计\\s*(\\d{1,2})\\s*月\\s*(\\d{1,2})\\s*[日号]").find(pool)?.let { m ->
+        // ★ vc695：平台的原文常写成「预计【11月10日】到达」「预计[11-10]」
+        //   —— 旧正则要求「预计」后面紧跟数字，前面那个方括号直接把整条规则废掉了。
+        val lead = "预计\\s*[【\\[（(]?\\s*"
+        Regex("$lead(\\d{1,2})\\s*月\\s*(\\d{1,2})\\s*[日号]?").find(pool)?.let { m ->
             val mo = m.groupValues[1].toIntOrNull()
             val dy = m.groupValues[2].toIntOrNull()
             if (mo != null && dy != null) dayText(daysUntil(mo, dy))?.let { return it }
         }
-        Regex("预计\\s*(\\d{1,2})\\s*[日号]").find(pool)?.let { m ->
+        Regex("$lead(\\d{1,2})\\s*[-/.]\\s*(\\d{1,2})").find(pool)?.let { m ->
+            val mo = m.groupValues[1].toIntOrNull()
+            val dy = m.groupValues[2].toIntOrNull()
+            if (mo != null && dy != null) dayText(daysUntil(mo, dy))?.let { return it }
+        }
+        Regex("$lead(\\d{1,2})\\s*[日号]").find(pool)?.let { m ->
             val dy = m.groupValues[1].toIntOrNull()
             if (dy != null) dayText(daysUntil(null, dy))?.let { return it }
         }
-        Regex("预计\\s*(今天|明天|后天)").find(pool)?.let { return "预计${it.groupValues[1]}送达" }
+        Regex("$lead(今天|明天|后天)").find(pool)?.let { return "预计${it.groupValues[1]}送达" }
         Regex("预计\\s*(\\d{1,3})\\s*小时").find(pool)?.let { return "预计${it.groupValues[1]}小时内送达" }
         if (status.contains("派送") || status.contains("派件") || status.contains("投递")) return "今日派送中"
         return ""
@@ -1870,6 +1882,12 @@ class MainActivity : Activity() {
                     "no=${p.optString("realWaybill").ifEmpty { p.optString("waybillNo") }} " +
                     "goods=${p.optString("goodsName")} status=${p.optString("statusText")}")
         }
+        // ★ vc695：分平台页 —— 只渲染当前选中平台的卡（"" = 全部）
+        if (transitPage.isNotEmpty()) {
+            val before = all.size
+            all.retainAll { transitSrcMatch(it.optString("src"), transitPage) }
+            Log.i("TransitPage", "平台页[$transitPage] 过滤 $before → ${all.size}")
+        }
         if (terminalRemoved.isNotEmpty()) {
             Log.i("TransitTerminal", "本轮共剔除 ${terminalRemoved.size} 张已完成卡")
         }
@@ -2263,6 +2281,12 @@ class MainActivity : Activity() {
      */
     private var transitRoundGen = 0
     private var transitExpect = 0
+    /** ★ vc695：途中快递当前选中的平台页（"" = 全部；pdd/tb/jd/mi/manual） */
+    private var transitPage = ""
+
+    /** ★ vc695：途中快递顶部的平台标签条容器 */
+    private var transitTabBar: LinearLayout? = null
+
     /** 在途栏"还没回来的源"队列：加载文案按它显示「正在获取X物流」（与第 4 栏同款体验） */
     private val transitPendings = ArrayList<String>()
     private var transitTimeout: Runnable? = null
@@ -10612,7 +10636,7 @@ class MainActivity : Activity() {
                 setTextColor(cTextPrimary)
             })
             card.addView(TextView(this).apply {
-                text = "检查通知使用权、各平台登录态、取件码与在途缓存、后台轮询，"
+                text = "检查通知使用权、各平台登录态、取件码与在途缓存、后台轮询是否正常；也能模拟一条取件码通知。"
                 textSize = UiTok.T12
                 setTextColor(cTextSecondary)
             }, LinearLayout.LayoutParams(
@@ -10621,6 +10645,13 @@ class MainActivity : Activity() {
             val runBtn = chip("运行自检", "#5E6AD2")
             runBtn.isClickable = true
             runBtn.setOnClickListener { showSelfTestDialog() }
+            // ★ vc695：通知使用权是「通知里抓取件码」的前提，给一个直达入口
+            val ntfBtn = chip("开启通知使用权", "#0A9E7B")
+            ntfBtn.isClickable = true
+            ntfBtn.setOnClickListener { openNotificationAccessSettings() }
+            card.addView(ntfBtn, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (8 * dp).toInt() })
             card.addView(runBtn, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { topMargin = (10 * dp).toInt() })
@@ -14954,15 +14985,20 @@ class MainActivity : Activity() {
         return sb.toString().trim()
     }
 
-    /** ★ vc693：自检结果弹窗（只读清单 + 一个「模拟一条取件码通知」按钮） */
+    /** ★ vc693：自检结果弹窗（只读清单 + 模拟通知 + 未授权时直达通知使用权） */
     private fun showSelfTestDialog() {
         try {
-            android.app.AlertDialog.Builder(this)
+            val msg = runSelfTest()
+            val b = android.app.AlertDialog.Builder(this)
                 .setTitle("自检")
-                .setMessage(runSelfTest())
+                .setMessage(msg)
                 .setNeutralButton("模拟一条取件码通知") { _, _ -> simulatePickupNotification() }
                 .setPositiveButton("关闭", null)
-                .showAnimated()
+            // ★ vc695：没开通知使用权时，多给一个直达系统设置的按钮
+            if (msg.contains("通知使用权：未开启")) {
+                b.setNegativeButton("去开通知使用权") { _, _ -> openNotificationAccessSettings() }
+            }
+            b.showAnimated()
         } catch (t: Throwable) {
             appToast(this, "自检失败：${t.message}")
         }
@@ -14999,6 +15035,107 @@ class MainActivity : Activity() {
         } catch (t: Throwable) {
             SafeRun.w("MainActivity", t)
             appToast(this, "复制失败：${t.message}")
+        }
+    }
+    /** ★ vc695：平台页与卡片来源的对应（淘宝那页把「菜鸟」也算进去） */
+    private fun transitSrcMatch(src: String, page: String): Boolean = when (page) {
+        "" -> true
+        "pdd" -> src == "pdd"
+        "tb" -> src == "tb" || src == "cainiao"
+        "jd" -> src == "jd"
+        "mi" -> src == "mi"
+        "manual" -> src == "manual"
+        else -> true
+    }
+
+    /** ★ vc695：平台页顺序（左右滑动按这个走） */
+    private fun transitPages(): List<Pair<String, String>> = listOf(
+        "" to "全部",
+        "pdd" to "拼多多",
+        "tb" to "淘宝",
+        "jd" to "京东",
+        "mi" to "小米",
+        "manual" to "手动"
+    )
+
+    /**
+     * ★ vc695：**分平台页**（用户要求：每个平台一页、左右滑动切换）。
+     *
+     * 只做「同一批数据按来源筛一遍」——抓取仍是一轮全抓（各源本来就是独立并发的、
+     * 谁先回来谁先上屏），所以分页不会让总耗时变长，只是把结果拆开看，
+     * 慢的平台不再拖着别的平台一起等。
+     */
+    private fun buildTransitTabs(parent: LinearLayout) {
+        val sv = android.widget.HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+        }
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        sv.addView(row)
+        parent.addView(sv, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply {
+            leftMargin = (10 * dp).toInt()
+            rightMargin = (10 * dp).toInt()
+        })
+        transitTabBar = row
+        refreshTransitTabs()
+    }
+
+    /** ★ vc695：重画平台标签（选中态用主色，未选中用灰） */
+    private fun refreshTransitTabs() {
+        val row = transitTabBar ?: return
+        row.removeAllViews()
+        for ((key, label) in transitPages()) {
+            val on = key == transitPage
+            val c = chip(label, if (on) "#5E6AD2" else "#8A8A8E")
+            c.isClickable = true
+            c.setOnClickListener {
+                if (transitPage == key) return@setOnClickListener
+                transitPage = key
+                refreshTransitTabs()
+                renderInTransit()
+            }
+            row.addView(c, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { leftMargin = (3 * dp).toInt(); rightMargin = (3 * dp).toInt() })
+        }
+    }
+
+    /** ★ vc695：左右滑动换平台页 */
+    private fun attachTransitSwipe(scroll: android.view.View) {
+        val pages = transitPages().map { it.first }
+        val gd = android.view.GestureDetector(
+            this, object : android.view.GestureDetector.SimpleOnGestureListener() {
+                override fun onFling(
+                    e1: android.view.MotionEvent?, e2: android.view.MotionEvent?,
+                    vx: Float, vy: Float
+                ): Boolean {
+                    val dx = (e2?.x ?: 0f) - (e1?.x ?: 0f)
+                    if (kotlin.math.abs(dx) < 110) return false
+                    val i = pages.indexOf(transitPage).coerceAtLeast(0)
+                    val next = if (dx < 0) i + 1 else i - 1
+                    if (next !in pages.indices) return true
+                    transitPage = pages[next]
+                    refreshTransitTabs()
+                    renderInTransit()
+                    return true
+                }
+            }
+        )
+        scroll.setOnTouchListener { _, ev ->
+            try { gd.onTouchEvent(ev) } catch (t: Throwable) { SafeRun.w("MainActivity", t) }
+            false
+        }
+    }
+
+    /** ★ vc695：跳到系统「通知使用权」设置页（通知里抓取件码的前提） */
+    private fun openNotificationAccessSettings() {
+        try {
+            startActivity(android.content.Intent(
+                android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS
+            ))
+        } catch (t: Throwable) {
+            appToast(this, "打不开通知使用权设置：${t.message}")
         }
     }
     private fun chip(text: String, colorHex: String): TextView = TextView(this).apply {
