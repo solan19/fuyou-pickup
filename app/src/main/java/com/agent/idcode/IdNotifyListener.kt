@@ -141,10 +141,10 @@ class IdNotifyListener : NotificationListenerService() {
 
         /** 取件码正则：优先认"取件码X"这种明写，其次认驿站附近的横杠格口码 */
         private val P_CODE = Pattern.compile(
-            "(?:取件码|取货码|提货码|提取码|凭码|取件口令|取件密码)[是为：:\\s]*([0-9A-Za-z]{1,6}(?:-[0-9A-Za-z]{1,6}){0,3})"
+            "(?:取件码|取货码|提货码|提取码|凭码|取件口令|取件密码)[是为：:\\s]*([0-9A-Za-z]{2,6}(?:-[0-9A-Za-z]{1,6}){0,3})"
         )
         private val P_NEAR = Pattern.compile(
-            "([0-9A-Za-z]{1,6}(?:-[0-9A-Za-z]{1,6}){1,3})(?=[^0-9A-Za-z]{0,8}(?:取件|驿站|柜|代收点|自提))"
+            "([0-9A-Za-z]{2,6}(?:-[0-9A-Za-z]{1,6}){1,3})(?=[^0-9A-Za-z]{0,8}(?:取件|驿站|柜|代收点|自提))"
         )
 
         fun looksLikeExpress(text: String): Boolean = HINTS.any { text.contains(it) }
