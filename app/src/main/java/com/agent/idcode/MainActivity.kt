@@ -341,6 +341,10 @@ class MainActivity : Activity() {
         //   拼多多在途要走一遍 WebView，常常 20~30 秒，那段时间页面不该是空的。
         //   ★ 顺序有讲究：**先** fetchInTransit()（它会写"正在获取…"），**再**用缓存画
         //     （把文案改成"刷新中 · 上次 xx:xx"）—— 反过来的话，缓存文案会被抓取那份盖掉。
+        // ★ vc692：先把落盘的卡**按源灌回内存字段**。
+        //   原来内存字段只在"本轮抓取回来"时才填 —— 中途退出会让这一轮白跑，
+        //   下次进页既没有内存数据、缓存又没更新过 ⇒ 必须重新等 20 多秒（用户反馈的"没有缓存"）。
+        hydrateTransitSources()
         val cached = loadTransitCache()
         // ★ vc255：轨迹缓存也一起读回来。pddTransitTraceCache 原来只是进程内 Map，
         //   App 一杀就丢（ColorOS 上滑划掉 = 全面清场）⇒ 每次冷启动后进第 5 栏都必然
@@ -361,6 +365,11 @@ class MainActivity : Activity() {
     }
 
     private fun closeTransit() {
+        // ★ vc692：退出时立刻把这一轮已经拿到的卡（含缓存回灌的部分）落盘。
+        //   原来只在"全部源都回来 + 页面还开着"时才写 ⇒ 中途退出 = 这一轮白跑。
+        if (transitLayer != null) {
+            try { saveTransitCache() } catch (t: Throwable) { SafeRun.w("TransitCache", t) }
+        }
         transitTimeout?.let { mainHandler.removeCallbacks(it) }
         transitTimeout = null
         transitLayer?.let { root.removeView(it) }
@@ -1102,6 +1111,64 @@ class MainActivity : Activity() {
             } catch (t: Throwable) { SafeRun.w("MainActivity", t) }
         }
         Regex("预计\\s*(今天|明天|后天)").find(latest)?.let { return "预计${it.groupValues[1]}送达" }
+
+    /**
+     * ★ vc692：途中卡「预计到达」文案 —— **只在真有依据时返回非空**。
+     *
+     * 与 [etaText] 的分工：etaText 兜底永远给一句话（"在途中"），适合当状态词；
+     * 卡片信息行只要"预计"这类有价值的结论，认不出就返回空串（调用方不显示），
+     * 免得每张卡都挂一句废话。
+     *
+     * 认这些形态：`预计11月5日` / `预计5日` / `预计5号` / `预计今天|明天|后天` /
+     * `预计24小时`；都没有但已在派送 ⇒「今日派送中」。
+     */
+    private fun etaForCard(latest: String, traceLines: String, status: String): String {
+        val pool = listOf(latest, status, traceLines).joinToString(" ")
+        Regex("预计\\s*(\\d{1,2})\\s*月\\s*(\\d{1,2})\\s*[日号]").find(pool)?.let { m ->
+            val mo = m.groupValues[1].toIntOrNull()
+            val dy = m.groupValues[2].toIntOrNull()
+            if (mo != null && dy != null) dayText(daysUntil(mo, dy))?.let { return it }
+        }
+        Regex("预计\\s*(\\d{1,2})\\s*[日号]").find(pool)?.let { m ->
+            val dy = m.groupValues[1].toIntOrNull()
+            if (dy != null) dayText(daysUntil(null, dy))?.let { return it }
+        }
+        Regex("预计\\s*(今天|明天|后天)").find(pool)?.let { return "预计${it.groupValues[1]}送达" }
+        Regex("预计\\s*(\\d{1,3})\\s*小时").find(pool)?.let { return "预计${it.groupValues[1]}小时内送达" }
+        if (status.contains("派送") || status.contains("派件") || status.contains("投递")) return "今日派送中"
+        return ""
+    }
+
+    /** 天数 → 人话；超出 0..30 天视为不可信，返回 null */
+    private fun dayText(days: Int?): String? = when {
+        days == null || days !in 0..30 -> null
+        days == 0 -> "预计今天送达"
+        days == 1 -> "预计明天送达"
+        else -> "预计${days}天后送达"
+    }
+
+    /**
+     * 目标月/日距今天的天数。`month = null` 表示原文只给了日号：
+     * 先按本月算，结果为负则视为跨月，加一个月重算。
+     */
+    private fun daysUntil(month: Int?, day: Int): Int? = try {
+        val now = java.util.Calendar.getInstance()
+        val target = (now.clone() as java.util.Calendar).apply {
+            if (month != null) set(java.util.Calendar.MONTH, month - 1)
+            set(java.util.Calendar.DAY_OF_MONTH, day)
+            set(java.util.Calendar.HOUR_OF_DAY, 23)
+            set(java.util.Calendar.MINUTE, 59)
+        }
+        var days = ((target.timeInMillis - now.timeInMillis) / 86_400_000L).toInt()
+        if (month == null && days < 0) {
+            target.add(java.util.Calendar.MONTH, 1)
+            days = ((target.timeInMillis - now.timeInMillis) / 86_400_000L).toInt()
+        }
+        days
+    } catch (t: Throwable) {
+        SafeRun.w("MainActivity", t)
+        null
+    }
         if (status.contains("派送") || status.contains("配送")) return "即将送达"
         return "在途中"
     }
@@ -1397,6 +1464,48 @@ class MainActivity : Activity() {
      * 源回调"成功才赋值"⇒ 失败时字段保持旧卡 ⇒ 落盘自然保留。
      * clearAll=true 仅供测试数据清理用（连轨迹缓存一起清）。
      */
+    /**
+     * ★ vc692：把落盘的在途卡按源灌回内存字段（pddTransit/jdTransit/miTransit/tbTransit/manualTransit）。
+     *
+     * 为什么要这一步：内存字段原本只在「本轮该源抓取成功」时才赋值 ⇒
+     *   ① 用户中途退出（源还没回来）⇒ 这一轮没有任何字段被填 ⇒
+     *      退出时无从落盘、下次进来缓存也没有新东西，只能重新等一遍；
+     *   ② 冷启动后内存为空，而缓存文件里其实躺着上一轮的卡。
+     * 先灌回内存，后续「退出即落盘」才是安全的（不会拿空数组覆盖好缓存）。
+     * 只灌**当前为空**的源，不覆盖本轮已经抓到的数据。
+     */
+    private fun hydrateTransitSources() {
+        try {
+            synchronized(UiCacheSync.FILE_LOCK) {
+                val f = transitCacheFile()
+                if (!f.exists()) return
+                val root = JSONObject(f.readText())
+                if (System.currentTimeMillis() - root.optLong("ts") > TRANSIT_LIST_KEEP_MS) return
+                val src = root.optJSONObject("sources") ?: return
+                fun read(key: String): ArrayList<JSONObject> {
+                    val out = ArrayList<JSONObject>()
+                    val arr = src.optJSONArray(key) ?: return out
+                    for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { out.add(it) }
+                    return out
+                }
+                var n = 0
+                fun hydrate(field: ArrayList<JSONObject>, key: String) {
+                    if (field.isNotEmpty()) return
+                    val got = read(key)
+                    if (got.isNotEmpty()) { field.addAll(got); n += got.size }
+                }
+                hydrate(pddTransit, "pdd")
+                hydrate(jdTransit, "jd")
+                hydrate(miTransit, "mi")
+                hydrate(tbTransit, "tb")
+                hydrate(manualTransit, "manual")
+                if (n > 0) Log.i("TransitCache", "缓存回灌：$n 张卡进内存（退出即落盘的前提）")
+            }
+        } catch (t: Throwable) {
+            SafeRun.w("TransitCache", t)
+        }
+    }
+
     private fun saveTransitCache(clearAll: Boolean = false) {
         // ★ vc281：后台 UiCacheSync 也会写这个文件（WorkManager 线程）⇒ 读改写全程持锁
         try {
@@ -1958,6 +2067,31 @@ class MainActivity : Activity() {
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
                 ).apply { topMargin = (4 * dp).toInt() })
             }
+
+            // ★ vc692：信息行 —— 快递公司 · 物流单号 · 预计到达（不展开就能一眼看到）
+            run {
+                val bits = ArrayList<String>()
+                courierTagOf(pkg)?.let { bits.add(it) }
+                val wbReal = pkg.optString("realWaybill").trim()
+                val wbNo = pkg.optString("waybillNo").trim()
+                when {
+                    wbReal.isNotEmpty() -> bits.add(wbReal)
+                    wbNo.isNotEmpty() -> bits.add(wbNo)
+                }
+                etaForCard(latest, pkg.optString("traceLines"), status)
+                    .takeIf { it.isNotEmpty() }?.let { bits.add(it) }
+                if (bits.isNotEmpty()) {
+                    head.addView(TextView(this).apply {
+                        text = bits.joinToString(" · ")
+                        textSize = UiTok.T12
+                        setTextColor(cTextSecondary)
+                        maxLines = 1
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                    }, LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = (4 * dp).toInt() })
+                }
+            }
             card.addView(head)
 
             // 展开区：精确物流（默认 GONE；展开时把下面的卡片往下挤 —— LinearLayout 天然行为）
@@ -2013,6 +2147,8 @@ class MainActivity : Activity() {
             }
             dline("状态", status)
             dline("单号", no)
+            dline("快递公司", courierTagOf(pkg).orEmpty())
+            dline("预计到达", etaForCard(latest, pkg.optString("traceLines"), status))
             card.addView(detail)
 
             head.setOnClickListener {
@@ -2223,6 +2359,7 @@ class MainActivity : Activity() {
         "pdd" -> "#E02E24"
         "cainiao" -> "#0A9E7B"
         "tb" -> "#FF5000"
+        "ntf" -> "#7A5AF8"
         else -> "#666666"
     }
 
@@ -7163,6 +7300,7 @@ class MainActivity : Activity() {
         "jd" -> "京东"
         "mi" -> "小米"
         "manual" -> "手动"
+        "ntf" -> "通知"
         else -> src
     }
 
@@ -13390,6 +13528,32 @@ class MainActivity : Activity() {
             ).any { st.contains(it) }
         }
 
+        // ★ vc692：通知来源并入 —— IdNotifyListener 从拼多多 / 淘宝 / 京东等 App 的通知里
+        //   白捡到的取件码（存在 PddCodeStore 的 "ntf:<码>" 条目里）。
+        //   刻意放在黑名单与跨源去重**之前**：通知卡也要能被长按删除、也要和接口卡合并，
+        //   不能自带一条绕过既有闸门的捷径。
+        run {
+            var ntfCount = 0
+            for (c in PddCodeStore.all(this).values) {
+                if (c.src != "ntf") continue
+                if (c.code.isBlank() || PddCodeStore.isPicked(c) || PddCodeStore.looksTaken(c)) continue
+                ntfCount++
+                pending.add(JSONObject().apply {
+                    put("src", "ntf")
+                    put("pickupCode", c.code)
+                    put("waybillNo", c.waybill)
+                    put("realWaybill", c.waybill)
+                    put("goodsName", "通知里的取件码")
+                    put("statusText", "待取件")
+                    put("latest", c.latest)
+                    if (c.station.isNotBlank()) {
+                        put("stationText", c.station)
+                        put("nickName", c.station)
+                    }
+                })
+            }
+            if (ntfCount > 0) Log.i("NtfCode", "通知来源并入取件码栏：$ntfCount 条")
+        }
         // ★ 用户长按删除过的单：不再自动补回（键 = src:单号，与取件码缓存同一套键）
         // ★★ vc670：**跨来源判**。同一件在拼多多/菜鸟各有一张卡、键不同，
         //   旧写法只比 `src:键` ⇒ 删掉一张、另一张下一次渲染就把它顶回来
@@ -14625,6 +14789,49 @@ class MainActivity : Activity() {
      * 以前是品牌色实底 + 白字 —— 一排卡片上挂着顺丰蓝/京东红/拼多多红，
      * 跟新的中性卡片放一起太跳（同志反复提的"调色板打翻"就是这个）。
      */
+    /**
+     * ★ vc692：卡片上「已取件」按钮的一键切换（用户要求：取件码旁边放按钮确认是否已取）。
+     *
+     * 逻辑与长按菜单里的「标记 / 取消已取件」**完全一致**，只是不用再绕一层弹窗：
+     *   ① 标记要落到**整件包裹**上（同一个码常有两份缓存，只标一条会被去重后留下没标的那条）；
+     *   ② 先写身份标记 [PickedStore]，再刷缓存条目 —— 否则取消标记会被 all() 又补回来；
+     *   ③ 取消时必须走 putForce 强制清 0，不能被「保留旧标记」的兜底逻辑吃掉。
+     */
+    private fun togglePickedFromCard(pkg: JSONObject) {
+        try {
+            val src = pkg.optString("src")
+            val code = pkg.optString("pickupCode")
+            val sn = pkg.optString("waybillNo").ifEmpty { pkg.optString("realWaybill") }
+            val isPicked = pkg.optLong("pickedAt", 0L) != 0L
+            val k = if (sn.isNotEmpty()) "$src:$sn" else if (code.isNotEmpty()) "$src:$code" else ""
+            val c = if (k.isNotEmpty()) PddCodeStore.get(this, k) else null
+            if (c == null) {
+                appToast(this, "这单没有取件码缓存，没法标记")
+                return
+            }
+            val ids = LinkedHashSet<String>(parcelIds(src, pkg))
+            if (code.isNotEmpty()) ids.add(code)
+            if (sn.isNotEmpty()) ids.add(sn)
+            val newAt = if (isPicked) 0L else System.currentTimeMillis()
+            if (isPicked) PickedStore.unmark(this, ids) else PickedStore.mark(this, ids)
+            var hit = 0
+            for ((ck, cc) in PddCodeStore.all(this)) {
+                val same = ck == k || ck.substringAfter(':') in ids ||
+                        cc.code in ids || cc.waybill in ids
+                if (!same) continue
+                setManualPicked(ck, !isPicked)
+                PddCodeStore.putForce(this, ck, cc.copy(pickedAt = newAt))
+                hit++
+            }
+            pickupDirty = true
+            Log.i("AcctScope", "卡片按钮切换已取件：$k → 同件缓存 $hit 条")
+            appToast(this, if (isPicked) "已取消「已取件」标记" else "已标记为取件（24 小时后自动清除）")
+            if (pickupLayer != null) renderMerged()
+            mainHandler.post { runCatching { rebuildHome() } }
+        } catch (t: Throwable) {
+            SafeRun.w("MainActivity", t)
+        }
+    }
     private fun chip(text: String, colorHex: String): TextView = TextView(this).apply {
         val brand = Color.parseColor(colorHex)
         this.text = text
@@ -14912,7 +15119,10 @@ class MainActivity : Activity() {
                 else -> "取件码获取中"
             }
         }
-        left.addView(TextView(this@MainActivity).apply {
+        // ★ vc692：取件码与「已取件」按钮**同一行**（用户要求：码旁边给个按钮确认取没取）。
+        //   按钮只在真有取件码的卡上出现；点一下 = 长按菜单里那套「标记 / 取消已取件」，
+        //   只是省掉一层弹窗。
+        val codeTv = TextView(this@MainActivity).apply {
             text = mainText.ifEmpty { "—" }
             // ★ vc579：取件码是主角 —— 28sp（全局唯一 display 级）；无码文案降到 15sp 正文档
             textSize = if (code.isEmpty()) UiTok.T15 else UiTok.T28
@@ -14926,7 +15136,26 @@ class MainActivity : Activity() {
             if (isPicked) {
                 paintFlags = paintFlags or android.graphics.Paint.STRIKE_THRU_TEXT_FLAG
             }
-        }, LinearLayout.LayoutParams(
+        }
+        val codeRow = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(codeTv, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+            if (code.isNotEmpty()) {
+                val markBtn = chip(
+                    if (isPicked) "取消已取件" else "标记已取件",
+                    if (isPicked) "#757575" else "#5E6AD2"
+                )
+                markBtn.isClickable = true
+                markBtn.setOnClickListener { togglePickedFromCard(pkg) }
+                addView(markBtn, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { leftMargin = (10 * dp).toInt() })
+            }
+        }
+        left.addView(codeRow, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = (2 * dp).toInt() })
         // ★ 无取件码的源，`mainText` 上面已经取过 tip 当主信息位了 ⇒ 这里别再加一遍
