@@ -2012,13 +2012,19 @@ class MainActivity : Activity() {
                 }
                 val before = mergedTransit.size
                 mergedTransit.removeAll(drop)
-                // ★★ v1.4.0：**各源列表也一起剔**，否则标签数字（如「拼多多 11」）是按原始列表
-                //   算的，会出现"数字 11、卡片 7 张"的不一致。
-                pddTransit.removeAll(drop)
-                jdTransit.removeAll(drop)
-                miTransit.removeAll(drop)
-                manualTransit.removeAll(drop)
-                tbTransit.removeAll(drop)
+                // ★★ v1.4.1：**不再改写各源列表**（撤回 1.4.0 的做法）。
+                //   1.4.0 为了对齐标签数字，直接对 pddTransit/jdTransit/… 做了 removeAll，
+                //   结果是"把源数据删掉了"：进页先用缓存画一屏还能看到那张卡，随后各源回调
+                //   触发第二次重画时，源列表里已经不含它 ⇒ 卡片"闪一下又消失"（同志实测皇帝柑），
+                //   而且**改规则也回不来**（源数据没了）。
+                //   现在只过滤每轮新建的派生列表 mergedTransit，源列表保持完整 ⇒
+                //   规则一变 / 下一轮抓取回来，立刻就能显示。
+                if (before != mergedTransit.size) {
+                    Log.i(
+                        "TransitMuted",
+                        "在途栏按名单剔除 ${before - mergedTransit.size} 件（源列表保持完整）"
+                    )
+                }
                 if (before != mergedTransit.size) {
                     Log.i("PickupMuted", "途中栏按屏蔽名单剔除 ${before - mergedTransit.size} 件")
                 }
