@@ -203,102 +203,144 @@ fun setEnabled(ctx: Context, on: Boolean) {
         ensureChannel(ctx)
         val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
 
-        // ★★ App 侧总开关：关掉就把 want 清空 ——
-        //   下面「撤掉已经不在了的」（posted - wantIds）会自然把已发的**全部撤下**，
-        //   不用再写一遍撤销逻辑。注意这里**完全不碰系统权限、不跳系统设置**：
-        //   用户只是选择"不走这条路"，路本身还在（系统那层归他自己在系统设置里管）。
+        // ★★ vc699：**聚类** —— 未取件的取件码合并成**一条**通知（原来一个码一条）。
+        //   同志要求：流体云 \/ 实况位上别铺一排小卡片，一个「待取 N 件」的聚合体更像回事；
+        //   码本身在展开态（BigTextStyle）里逐行列出，一眼看全。
+        val id = idOf("all")
+
+        // App 侧总开关：关掉就把已发的全部撤下（下面 posted 分支自然会走到）
         if (!isEnabled(ctx)) {
-            val posted = postedIds(ctx)
-            for (old in posted) {
-                try {
-                    nm.cancel(old)
-                } catch (t: Throwable) { SafeRun.w("LiveUpdate", t) }
-            }
-            savePosted(ctx, emptySet())
-            Log.i(TAG, "流体云已在设置里关闭 ⇒ 撤下 ${posted.size} 条")
+            cancelAll(ctx)
             return
         }
 
-        // ★ 只上「没取走」的：有取件码、且不是终态。终端态由调用方过滤，这里再兜一道
+        // 只上「没取走」的：有取件码、且不是终态。终端态由调用方过滤，这里再兜一道。
+        // 按**取件码**去重（不是按单号）—— 同一个码会带两个不同单号（订单号 \/ 运单号口径）。
         val want = entries
             .filter { it.no.isNotBlank() && it.code.isNotBlank() }
-            // ★ 按**取件码**去重（不是按单号）：实测快照里同一个码 `31-5-7006` 会带两个不同单号
-            //   （拼多多的订单号与运单号口径不同，见 `ExpressStore.fromPkg`），
-            //   按单号去重会漏掉 ⇒ 流体云上出现两条一模一样的「取件码 31-5-7006」。
-            //   用户要看的**就是那个码**，同码重复显示只有害处；宁可少显示一个驿站。
             .distinctBy { it.code }
-            .take(6)                     // 最多 6 条，跟桌面小组件一个量级，不霸屏
+            .take(6)                     // 最多 6 条，跟桌面小组件一个量级
 
-        val wantIds = want.map { idOf(it.no) }.toSet()
-
-        // ★★ vc467：**内容指纹去重 + 尊重划掉**（同志反馈：同一码每 10 分钟弹一次，划掉还弹）
-        //   ① 指纹没变 ⇒ 不 notify（系统那边仍是同一个活通知，不会重新浮出）
-        //   ② 用户划掉过、且内容没变 ⇒ 不重挂
-        //   ③ 内容变了（码/驿站/快递公司）⇒ 清掉划掉记录，正常重发
         val fpMap = loadFp(ctx).toMutableMap()
         val disMap = loadDismissed(ctx).toMutableMap()
         val tsMap = loadTs(ctx).toMutableMap()
+        val posted = postedIds(ctx).toMutableSet()
         val now = System.currentTimeMillis()
-        for (e in want) {
-            val id = idOf(e.no)
-            val fp = fpOf(e)
-            val prev = fpMap[id]
-            val prevCode = prev?.substringBefore("§").orEmpty()
-            val changed = prev != fp
-            val sameCode = prevCode.isNotEmpty() && prevCode == e.code
-            val inCooldown = sameCode && (now - (tsMap[id] ?: 0L) < 6 * 3600_000L)
-            if (changed && disMap.remove(id) != null) {
-                Log.i(TAG, "内容有变，恢复上岛 code=${e.code}")
-            }
-            if (inCooldown) {
-                Log.i(TAG, "同码 6 小时内，跳过重发 code=${e.code}")
-            } else if (!changed) {
-                Log.i(TAG, "内容未变，跳过重发 code=${e.code}")
-            } else if (!disMap.containsKey(id)) {
-                try {
-                    nm.notify(id, build(ctx, e))
-                    fpMap[id] = fp
-                    tsMap[id] = now
-                    Log.i(TAG, "首次/变更上岛 code=${e.code}")
-                } catch (ex: Throwable) {
-                    Log.w(TAG, "发实况位失败 ${e.no}: ${ex.message}")
+
+        // ① 一条可取件都没有 ⇒ 撤下（★ vc472 口径不变：30 分钟宽限，防源抖动来回弹）
+        if (want.isEmpty()) {
+            if (posted.contains(id)) {
+                val ts = tsMap[id] ?: 0L
+                if (ts != 0L && now - ts < 30 * 60_000L) {
+                    Log.i(TAG, "暂不撤下聚类实况位（发布未满 30 分钟，防抖动）")
+                } else {
+                    try {
+                        nm.cancel(id)
+                    } catch (t: Throwable) { SafeRun.w("LiveUpdate", t) }
+                    posted.remove(id)
+                    Log.i(TAG, "待取件已空 ⇒ 撤下聚类实况位")
                 }
             }
+            fpMap.remove(id)
+            tsMap.remove(id)
+            saveFp(ctx, fpMap)
+            saveTs(ctx, tsMap)
+            savePosted(ctx, posted)
+            saveDismissed(ctx, disMap)
+            return
         }
-        // 已不在 want 里的：清指纹与划掉记录，避免无限增长
-        fpMap.keys.retainAll(wantIds)
-        disMap.keys.retainAll(wantIds)
-        saveFp(ctx, fpMap)
-        saveDismissed(ctx, disMap)
-        tsMap.keys.retainAll(wantIds)
-        saveTs(ctx, tsMap)
 
-        // 撤掉已经不在了的（已取出 / 被用户删掉）
-        // ★ vc472：**30 分钟宽限** —— 源偶尔失败/快照抖动会让某条暂时不在 want 里，
-        //   立刻撤掉的话，下一轮又挂回去 = 用户看到的"时不时弹一次"。
-        //   发布不满 30 分钟的先留着（内容不变不会重弹），超过 30 分钟才真正撤。
-        val posted = postedIds(ctx)
-        val stillPosted = mutableSetOf<Int>()
-        for (old in posted - wantIds) {
-            val ts = tsMap[old] ?: 0L
-            if (ts != 0L && now - ts < 30 * 60_000L) {
-                stillPosted.add(old)
-                Log.i(TAG, "暂不撤下 id=$old（发布未满 30 分钟，防抖动）")
-                continue
+        // ② 指纹 = 全部码排序后拼接（码集合没变就不重发；驿站文案变化只在正文体现）
+        val fp = want.map { it.code }.sorted().joinToString("§")
+        val prev = fpMap[id]
+        val changed = prev != fp
+        val inCooldown = !changed && (now - (tsMap[id] ?: 0L) < 6 * 3600_000L)
+        if (changed && disMap.remove(id) != null) {
+            Log.i(TAG, "内容有变，恢复聚类实况位")
+        }
+        if (inCooldown) {
+            Log.i(TAG, "同内容 6 小时内，跳过重发（${want.size} 个码）")
+        } else if (!changed) {
+            Log.i(TAG, "内容未变，跳过重发（${want.size} 个码）")
+        } else if (!disMap.containsKey(id)) {
+            try {
+                nm.notify(id, buildCluster(ctx, want))
+                fpMap[id] = fp
+                tsMap[id] = now
+                posted.add(id)
+                Log.i(TAG, "聚类上岛 ${want.size} 条：" +
+                        want.joinToString(" | ") { "${it.code}@${it.station.take(8)}" })
+            } catch (ex: Throwable) {
+                Log.w(TAG, "发聚类实况位失败: ${ex.message}")
             }
+        }
+
+        // ③ 清掉旧的「一码一条」残留 id（历史版本发出去的），否则升级后旧卡会一直挂着
+        val legacy = posted.filter { it != id }
+        for (old in legacy) {
             try {
                 nm.cancel(old)
-                Log.i(TAG, "撤下实况位 id=$old")
+                Log.i(TAG, "撤下旧的单码实况位 id=$old")
             } catch (t: Throwable) { SafeRun.w("LiveUpdate", t) }
         }
-        savePosted(ctx, wantIds + stillPosted)
+        posted.removeAll(legacy)
 
-        if (want.isNotEmpty()) {
-            Log.i(
-                TAG,
-                "实况位同步 ${want.size} 条（提升资格=${canPostPromoted(ctx)}）: " +
-                        want.joinToString(" | ") { "${it.code}@${it.station.take(10)}" }
-            )
+        saveFp(ctx, fpMap)
+        saveTs(ctx, tsMap)
+        savePosted(ctx, posted)
+        saveDismissed(ctx, disMap)
+    }
+
+    /**
+     * ★ vc699：聚类通知的构造。
+     *   1 个码 ⇒ 与旧版单码通知同款（标题「取件码 XX」）；
+     *   多个 ⇒ 标题「待取快递 N 件」，正文逐行列「码 · 驿站 · 承运商」。
+     *   状态栏芯片（shortCriticalText）只有约 8 个半角字符宽：单码给码本身，多码给「取件码N件」。
+     */
+    private fun buildCluster(ctx: Context, list: List<Entry>): Notification {
+        val one = list.size == 1
+        val title = if (one) "取件码 ${list[0].code}" else "待取快递 ${list.size} 件"
+        val body = list.mapIndexed { i, e ->
+            buildString {
+                if (!one) append(i + 1).append(". ")
+                append(e.code)
+                if (e.station.isNotBlank()) append(" · ").append(e.station.take(20))
+                if (e.company.isNotBlank()) append(" · ").append(e.company)
+            }
+        }.joinToString("\n")
+        val shortText = if (one) shortOf(list[0].code) else "取件码${list.size}件"
+        val extras = Bundle().apply {
+            putBoolean(EXTRA_PROMOTED, true)
+            putCharSequence(EXTRA_SHORT_CRITICAL, shortText)
+        }
+        val sub = if (one) list[0].station.take(24) else "共 ${list.size} 个取件码"
+        return Notification.Builder(ctx, CHANNEL)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(Notification.BigTextStyle().bigText(body))
+            .setOngoing(true)
+            .addExtras(extras)
+            .setWhen(System.currentTimeMillis() + 6 * 60 * 60 * 1000L)
+            .setShowWhen(true)
+            .apply { if (sub.isNotBlank()) setSubText(sub) }
+            .setOnlyAlertOnce(true)
+            .setDeleteIntent(dismissPi(ctx, idOf_no = "all"))
+            .setContentIntent(openApp(ctx))
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .build()
+            .also {
+                Log.i(TAG, "构造聚类实况位 ${list.size} 条 自检: promotable=${promotableCharacteristics(it)}")
+            }
+    }
+
+    /** 状态栏芯片文案：去分隔符后塞得下就用码，塞不下再截 */
+    private fun shortOf(code: String): String {
+        val compact = code.replace("-", "").replace(" ", "")
+        return when {
+            code.length <= 8 -> code
+            compact.length <= 8 -> compact
+            else -> compact.take(8)
         }
     }
 
