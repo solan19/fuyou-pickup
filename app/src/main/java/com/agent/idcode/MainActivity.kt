@@ -10752,7 +10752,15 @@ class MainActivity : Activity() {
             // ★ vc707：排版与其它卡统一 —— 分类标题 13sp 次级色；入口走标准行，不再是小胶囊
             card.addView(sectionTitle("自检"))
             card.addView(hintLine("检查通知使用权、各平台登录态、取件码与在途缓存、后台轮询是否正常。"))
-            card.addView(sourceRow("运行自检", "逐项列结果", true) { showSelfTestDialog() })
+            // ⚠️ sourceRow 是 openSettings 里的局部函数（定义在本卡之后），这里只能用类级的 trackRow
+            card.addView(trackRow(
+                "运行自检",
+                TextView(this).apply {
+                    text = "逐项列结果"
+                    textSize = 13f
+                    setTextColor(cTextTertiary)
+                }
+            ) { showSelfTestDialog() })
             addCard(card)
         }
 
@@ -11560,7 +11568,7 @@ class MainActivity : Activity() {
         run {
             val labelCount = PickupLabel.load(this).size
             val labelStatus = TextView(this).apply {
-                text = if (labelCount > 0) "已配置 $labelCount 条 · 点击管理" else "点击添加规则",
+                text = if (labelCount > 0) "已配置 $labelCount 条 · 点击管理" else "点击添加规则"
                 textSize = 13f
                 setTextColor(cTextSecondary)
             }
@@ -16006,16 +16014,17 @@ class MainActivity : Activity() {
             val addBtn = chip("添加这条规则", "#2E9E5B").apply {
                 isClickable = true
                 setOnClickListener {
+                    // ⚠️ 这里是 chip(...).apply{} 内部 ⇒ this 是 TextView，凡是要 Context 的一律显式写
                     val m = matchIn.text.toString().trim()
                     if (m.isEmpty()) {
-                        appToast(this, "先写要匹配的文字")
+                        appToast(this@MainActivity, "先写要匹配的文字")
                     } else {
-                        val list = PickupLabel.load(this).toMutableList()
+                        val list = PickupLabel.load(this@MainActivity).toMutableList()
                         list.add(PickupLabel.Rule(m, showIn.text.toString().trim(), stopMode))
-                        PickupLabel.save(this, list)
-                        rules = PickupLabel.load(this)
+                        PickupLabel.save(this@MainActivity, list)
+                        rules = PickupLabel.load(this@MainActivity)
                         refreshStatus()
-                        appToast(this, "已添加")
+                        appToast(this@MainActivity, "已添加")
                         rebuild()
                     }
                 }
