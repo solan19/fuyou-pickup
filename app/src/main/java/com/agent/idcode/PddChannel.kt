@@ -594,8 +594,12 @@ object PddChannel {
                         Log.i(TAG, "轨道状态 $sn=SEND（已发货/在途），不生成取件码占位卡")
                         continue
                     }
-                    // ★ 只跳过**不该出卡**的（已取走/还没到驿站）；其余（SIGN/IN_CABINET/未知）都收
-                    if (isNonPickupState(st)) continue
+                    // ★★ vc703：**白名单** —— 只有能确认"在驿站待取"的枚举才建卡；
+                    //   其余（含 OTHER 这种未知值、SIGN 以外的一切）只记状态。
+                    if (st !in PICKUP_CARD_STATES) {
+                        Log.i(TAG, "轨道状态 $sn=$st 不在建卡白名单，只记状态不出卡")
+                        continue
+                    }
                     // 已由订单列表产出（同号）就不再重复
                     if (out.any { it.optString("waybillNo") == sn || it.optString("orderSn") == sn }) continue
                     val key = "track:$sn"
@@ -643,6 +647,20 @@ object PddChannel {
      * （零识别信息的拼多多裸卡不上屏，见 renderMerged 的 vc222 注）。
      */
     private val NON_PICKUP_STATES = setOf("OUT_CABINET", "GOT", "ARRIVAL", "DEPARTURE")
+
+    /**
+     * ★★ vc703：**能建「在驿站待取」卡的枚举白名单**（同志 2026-11-09 拍板）。
+     *
+     *  · `IN_CABINET` = 在驿站待取（老口径，实测可信）
+     *  · `SIGN`       = 实测两种含义都出现过（"待取件" / "已从驿站取走但没点确认收货"）——
+     *                   建卡后由下游按文案打「已取件」灰标，所以留在白名单里。
+     *
+     * 为什么改成白名单（原来"未知枚举一律收进来"）：当天日志实测 `OTHER` 会给**在途单**
+     * 建一张「在驿站待取」空卡（4 张，sn 与在途单完全同号）；渲染层"零信息裸卡不上屏"
+     * 只是挡住了显示，它们仍每轮被当补码候选白跑（vc678 注释自己写过"每轮白跑 26 秒"）。
+     * 真到站的件仍有另外两条路出卡：cabinet 接口给码、物流页详情给站名+码。
+     */
+    private val PICKUP_CARD_STATES = setOf("IN_CABINET", "SIGN")
 
     /**
      * 第 5 栏「途中快递」里**不算途中**的 track/status 状态（已取走 + 在驿站待取）——
