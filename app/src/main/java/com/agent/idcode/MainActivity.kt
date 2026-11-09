@@ -303,6 +303,19 @@ class MainActivity : Activity() {
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ))
 
+        // ★ vc697：平台标签条 —— 途中快递按平台分开加载，左右滑动切换
+        val tabScroll = android.widget.HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+        }
+        val tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        tabScroll.addView(tabRow, ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        layer.addView(tabScroll, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = (2 * dp).toInt(); bottomMargin = (4 * dp).toInt() })
+        transitTabRow = tabRow
+        transitTabsScroll = tabScroll
+
         val scroll = ScrollView(this)
         val list = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -337,6 +350,15 @@ class MainActivity : Activity() {
         transitList = list
         transitSwipe = swipe
         transitStatus = status
+        // ★ vc697：**按平台分开加载** —— 进页只定标签、不抓全部平台。
+        //   首屏只抓当前标签这一路；其它平台等切到它时再抓（切回已抓过的不重复发请求）。
+        transitRoundLoaded.clear()
+        runCatching {
+            val avail0 = availableTransitSources()
+            transitSrc = preferTransitSrc(avail0)
+            refreshTransitTabs()
+            attachTransitTabSwipe(scroll)
+        }.onFailure { SafeRun.w("TransitTab", it) }
         // ★ vc234：和取件码栏同一套 —— 进页先把上次的在途件画出来，抓取在后台跑。
         //   拼多多在途要走一遍 WebView，常常 20~30 秒，那段时间页面不该是空的。
         //   ★ 顺序有讲究：**先** fetchInTransit()（它会写"正在获取…"），**再**用缓存画
@@ -377,6 +399,10 @@ class MainActivity : Activity() {
         transitList = null
         transitSwipe = null
         transitStatus = null
+        // ★ vc697：标签条随层一起消失（transitSrc 留着 —— 下次进来还停在上次看的平台）
+        transitTabRow = null
+        transitTabsScroll = null
+        transitRoundLoaded.clear()
     }
 
     /** 途中栏抓取：复用拼多多/京东两条通道，回调里对原始响应做宽口径解析（非终态订单） */
@@ -424,28 +450,35 @@ class MainActivity : Activity() {
         transitRoundGen++
         // ★ vc270c：各源字段**不再清空**（按源缓存口径）——刷新期间旧卡保留，
         //   源成功才替换它那份；失败/中断自然保留（对齐取件码页"失败绝不动缓存"）
-        val wantPdd = PddChannel.isLoggedIn(this)
-        val wantJd = JdChannel.isLoggedIn(this)
-        val wantMi = miEnabled() && MiChannel.isLoggedIn(this)
+        // ★ vc697：**按平台分开加载** —— 本轮只抓当前标签这一个源。
+        //   起因（2026-11-09 真机日志实测）：四个源并行时，整栏「更新于」要等**最慢**的那个 ——
+        //   拼多多原生接口 0.585s、淘宝网页旁听 2.9s，而京东那一路要 16.6s（这台机器每次都是
+        //   0 张卡），于是进页后状态行一直挂着「正在获取京东物流」十几秒 —— 用户说的"加载慢"。
+        //   分开之后：进哪个平台就抓哪个平台，互不拖累。
+        val tabSrc = if (transitSrc.isEmpty()) "pdd" else transitSrc
+        if (tabSrc.isNotEmpty()) transitRoundLoaded.add(tabSrc)
+        val wantPdd = PddChannel.isLoggedIn(this) && tabSrc == "pdd"
+        val wantJd = JdChannel.isLoggedIn(this) && tabSrc == "jd"
+        val wantMi = miEnabled() && MiChannel.isLoggedIn(this) && tabSrc == "mi"
         // ★ vc270：淘宝在途源 —— 淘宝登录态（jar cookie）即可，走网页层旁听链路
-        val wantTb = TbChannel.isLoggedIn()
+        val wantTb = TbChannel.isLoggedIn() && tabSrc == "tb"
         // ★ 修真 bug：原来 `(if (wantMi) 1 else 0)` 写了**两次**（末尾本该是 wantSf/wantEms 的位），
         //   期望数因此永远比实际回调数多 1 —— 而 renderInTransit 开头是
         //   `if (transitGot < transitExpect) return` ⇒ 小米开着的时候**一张卡都渲染不出来**，
         //   只能等 50 秒超时报"超时"。
+        // ★ vc697：手动单号现在是**独立标签** —— 轮到它时占一个期待位（否则状态行会永远
+        //   停在"正在获取手动添加的单号…"，不会结算成"更新于 HH:mm"）。
+        val hasManual = manualWaybills(this).isNotEmpty() && tabSrc == "manual"
         transitExpect = (if (wantPdd) 1 else 0) + (if (wantJd) 1 else 0) +
-            (if (wantMi) 1 else 0) + (if (wantTb) 1 else 0)
+            (if (wantMi) 1 else 0) + (if (wantTb) 1 else 0) +
+            (if (hasManual) 1 else 0)
         // ★ 加载文案要显示"正在获取哪个平台的物流"（同志 2026-09-21 要求，跟取件码那栏一致）。
-        //   手动单号**不进队列** —— 它不占 expect，不该在文案里冒充主角。
         transitPendings.clear()
         if (wantPdd) transitPendings.add("pdd")
         if (wantJd) transitPendings.add("jd")
         if (wantMi) transitPendings.add("mi")
         if (wantTb) transitPendings.add("tb")
-
-        // ★ vc259：手动单号不占 expect，但"没有任何平台源"时也不能早退 ——
-        //   否则只用手动单号的用户（平台全未登录）连手动单号都不查，列表永远空。
-        val hasManual = manualWaybills(this).isNotEmpty()
+        if (hasManual) transitPendings.add("manual")
         showStatusText(transitStatus)
         setStatusText(
             transitStatus,
@@ -1882,6 +1915,9 @@ class MainActivity : Activity() {
         }.filterNot {
             it.optString("src") == "mi" && MiShopChannel.isStaleForTransit(it)
         })
+        // ★ vc697：**只上屏当前平台标签的卡**（合并/去重/剔终态仍作用于全部来源，只在这里过一遍 src）
+        val shown = ArrayList(all.filter { it.optString("src") == transitSrc })
+        refreshTransitTabs()
         for (p in terminalRemoved) {
             Log.i("TransitTerminal", "途中栏剔除已完成包裹：src=${p.optString("src")} " +
                     "no=${p.optString("realWaybill").ifEmpty { p.optString("waybillNo") }} " +
@@ -1896,7 +1932,7 @@ class MainActivity : Activity() {
         Log.i("TransitDebug", "testTransit=${testTransit.size} merged=${mergedTransit.size} all=${all.size} " +
                 "pdd=${pddTransit.size} jd=${jdTransit.size} mi=${miTransit.size} " +
                 "manual=${manualTransit.size} tb=${tbTransit.size} blacklist=${pickupMutedAll().size}")
-        if (all.isEmpty()) {
+        if (shown.isEmpty()) {
             showStatusText(transitStatus)
             // ★ 秒显时空缓存（文件刚过期）别喊"暂无在途快递"—— 那是句结论，不是过程
             Log.i("TransitCache", "空列表：useCache=" + useCache + " 距进页=" +
@@ -1906,7 +1942,9 @@ class MainActivity : Activity() {
                 when {
                     stillFetching -> transitLoadingText()
                     useCache -> "正在获取…"
-                    else -> getString(R.string.transit_empty)
+                    // ★ vc697：按平台分开后，"没有"要说清是哪个平台没有
+                    else -> if (transitSrc.isEmpty()) getString(R.string.transit_empty)
+                        else srcName(transitSrc) + "暂无在途快递"
                 })
             return
         }
@@ -1950,8 +1988,9 @@ class MainActivity : Activity() {
         val cards = ArrayList<View>()
         val blacklist = pickupMutedAll()
         // ★ vc607：一行总账 —— 出现"少一张卡"时，先看这行对不对得上
-        Log.i("TransitRender", "准备渲染 all=${all.size} 张（blacklist=${blacklist.size}）")
-        for (pkg in all) {
+        Log.i("TransitRender", "准备渲染 tab=${transitSrc} shown=${shown.size} 张" +
+                "（all=${all.size} blacklist=${blacklist.size}）")
+        for (pkg in shown) {
             val src = pkg.optString("src")
             // ★★ vc670：**这里以前只算了黑名单却从不判**（muteNo/blacklist 算完就放着），
             //   所以「途中快递」里长按删除同样删不掉。改为跨来源判：任一身份命中即跳过。
@@ -2270,6 +2309,13 @@ class MainActivity : Activity() {
     /** ★ vc264m：第 5 栏的下拉刷新控件（null = 页面没开/已关） */
     private var transitSwipe: androidx.swiperefreshlayout.widget.SwipeRefreshLayout? = null
     private var transitStatus: TextView? = null
+    /** ★ vc697：平台标签条（途中快递按平台分开加载、左右滑动切换） */
+    private var transitTabRow: LinearLayout? = null
+    private var transitTabsScroll: android.widget.HorizontalScrollView? = null
+    /** 当前选中的平台："pdd" \/ "jd" \/ "tb" \/ "mi" \/ "manual"（空串 = 还没有可用平台） */
+    private var transitSrc: String = ""
+    /** 本轮已经抓过的平台 —— 切回已抓过的标签就不重复发请求 */
+    private val transitRoundLoaded = HashSet<String>()
     /** 进页时刻（诊断用：看真实抓取多久回来） */
     private var transitEnterMs: Long = 0L
     private var transitGot = 0
@@ -7133,8 +7179,13 @@ class MainActivity : Activity() {
                     Log.i("ManualWaybill",
                         "手动单号 ${done.incrementAndGet()}/${todo.size} 回来：$no")
                     if (pickupLayer != null) onPickupPart("manual", null)
-                    // ★ 手动单号不占 transitExpect ⇒ 这里**不能** transitGot++，
-                    //   否则其它源还没回来就把"到齐"条件满足了，会过早渲染（少显示别人的件）。
+                    // ★ vc697：手动单号作为**独立标签**时占一个期待位 ⇒ 全部查完就结算，
+                    //   状态行才会从"正在获取手动添加的单号…"换成"更新于 HH:mm"。
+                    //   不是当前标签时 pendings 里没有 "manual"，这里什么都不做（与旧行为一致）。
+                    if (transitPendings.contains("manual") && done.get() >= todo.size) {
+                        transitPendings.remove("manual")
+                        transitGot++
+                    }
                     if (transitLayer != null) renderInTransit()
                 }
             }
@@ -15129,6 +15180,164 @@ class MainActivity : Activity() {
             appToast(this, "复制失败：${t.message}")
         }
     }
+    // ---------------- ★ vc697：途中快递「按平台分开加载 + 左右滑动切换」 ----------------
+
+    /** 当前能用的在途平台（有登录态 / 有手动单号才给标签），顺序 = 标签顺序 */
+    private fun availableTransitSources(): ArrayList<String> {
+        val out = ArrayList<String>()
+        try {
+            if (PddChannel.isLoggedIn(this)) out.add("pdd")
+            if (JdChannel.isLoggedIn(this)) out.add("jd")
+            if (TbChannel.isLoggedIn()) out.add("tb")
+            if (miEnabled() && MiChannel.isLoggedIn(this)) out.add("mi")
+            if (manualWaybills(this).isNotEmpty()) out.add("manual")
+        } catch (t: Throwable) {
+            SafeRun.w("TransitTab", t)
+        }
+        return out
+    }
+
+    /** 首选标签：沿用上次看的平台；不可用就优先拼多多，再不行取第一个可用平台 */
+    private fun preferTransitSrc(avail: List<String>): String = when {
+        avail.isEmpty() -> ""
+        avail.contains(transitSrc) -> transitSrc
+        avail.contains("pdd") -> "pdd"
+        else -> avail.first()
+    }
+
+    /** 某个平台此刻在内存里有多少张卡（标签上的数字） */
+    private fun transitCountOf(src: String): Int = when (src) {
+        "pdd" -> pddTransit.size
+        "jd" -> jdTransit.size
+        "tb" -> tbTransit.size
+        "mi" -> miTransit.size
+        "manual" -> manualTransit.size
+        else -> 0
+    }
+
+    private fun transitTabChipText(src: String): String {
+        val n = transitCountOf(src)
+        return srcName(src) + (if (n > 0) " $n" else "")
+    }
+
+    private fun applyTransitTabChipLook(tv: TextView, active: Boolean) {
+        tv.text = transitTabChipText(tv.tag as? String ?: "")
+        tv.setTextColor(if (active) Color.WHITE else cTextSecondary)
+        val g = tv.background as? GradientDrawable
+        g?.setColor(
+            if (active) cAccent
+            else if (isDark()) Color.parseColor("#2A2B2F") else Color.parseColor("#F1F2F6")
+        )
+    }
+
+    /** 重建 / 刷新标签条（数量随渲染变化，每次渲染后调一次） */
+    private fun refreshTransitTabs() {
+        val row = transitTabRow ?: return
+        try {
+            val avail = availableTransitSources()
+            if (avail.isEmpty()) {
+                row.visibility = View.GONE
+                return
+            }
+            row.visibility = View.VISIBLE
+            if (!avail.contains(transitSrc)) transitSrc = preferTransitSrc(avail)
+            if (row.childCount != avail.size) {
+                row.removeAllViews()
+                for (s in avail) {
+                    val tv = TextView(this).apply {
+                        tag = s
+                        textSize = UiTok.T12
+                        typeface = tfMedium
+                        gravity = Gravity.CENTER
+                        setPadding((14 * dp).toInt(), (6 * dp).toInt(), (14 * dp).toInt(), (6 * dp).toInt())
+                        background = GradientDrawable().apply {
+                            shape = GradientDrawable.RECTANGLE
+                            cornerRadius = UiTok.R999 * dp
+                        }
+                        isClickable = true
+                        setOnClickListener { switchTransitTabTo(s) }
+                    }
+                    applyTransitTabChipLook(tv, s == transitSrc)
+                    row.addView(tv, LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { rightMargin = (8 * dp).toInt() })
+                }
+            } else {
+                for (i in 0 until row.childCount) {
+                    val tv = row.getChildAt(i) as? TextView ?: continue
+                    applyTransitTabChipLook(tv, (tv.tag as? String) == transitSrc)
+                }
+            }
+        } catch (t: Throwable) {
+            SafeRun.w("TransitTab", t)
+        }
+    }
+
+    /** 点标签切换平台 */
+    private fun switchTransitTabTo(src: String) {
+        if (src == transitSrc) return
+        transitSrc = src
+        afterTransitTabChanged()
+    }
+
+    /** 左右滑动切换平台（delta = ±1，循环） */
+    private fun switchTransitTabBy(delta: Int) {
+        val avail = availableTransitSources()
+        if (avail.size < 2) return
+        val idx = avail.indexOf(transitSrc).let { if (it < 0) 0 else it }
+        val nxt = ((idx + delta) % avail.size + avail.size) % avail.size
+        if (avail[nxt] == transitSrc) return
+        transitSrc = avail[nxt]
+        afterTransitTabChanged()
+    }
+
+    /**
+     * 切标签之后：先把内存里这一路的卡画出来（切页不闪白），
+     * 本轮还没抓过这个平台才只抓它自己 —— 这就是"按平台分开加载"的落点。
+     */
+    private fun afterTransitTabChanged() {
+        refreshTransitTabs()
+        renderInTransit()
+        if (transitSrc.isEmpty()) return
+        if (transitRoundLoaded.contains(transitSrc)) {
+            Log.i("TransitTab", "切到 ${srcName(transitSrc)}：本轮已抓过，直接用已有卡")
+            transitStatus?.let { tv ->
+                showStatusText(tv)
+                val t = getSharedPreferences(PREFS, MODE_PRIVATE)
+                    .getString(KEY_LAST_TRANSIT_TIME, "") ?: ""
+                if (t.isNotEmpty()) showUpdateThenHide(tv, "更新于 $t")
+            }
+            return
+        }
+        Log.i("TransitTab", "切到 ${srcName(transitSrc)}：本轮首次，只抓这一路")
+        fetchInTransit(force = true)
+    }
+
+    /** 左右滑动（只旁听触摸事件，不抢 ScrollView 的滚动） */
+    private fun attachTransitTabSwipe(scroll: View) {
+        try {
+            val gd = android.view.GestureDetector(this,
+                object : android.view.GestureDetector.SimpleOnGestureListener() {
+                    override fun onDown(e: android.view.MotionEvent): Boolean = true
+                    override fun onFling(
+                        e1: android.view.MotionEvent?, e2: android.view.MotionEvent,
+                        vx: Float, vy: Float
+                    ): Boolean {
+                        if (kotlin.math.abs(vx) <= kotlin.math.abs(vy) * 1.4f) return false
+                        if (kotlin.math.abs(vx) < 260f) return false
+                        switchTransitTabBy(if (vx < 0) 1 else -1)
+                        return true
+                    }
+                })
+            scroll.setOnTouchListener { _, ev ->
+                try { gd.onTouchEvent(ev) } catch (t: Throwable) { SafeRun.w("TransitTab", t) }
+                false   // 不消费事件 —— 竖向滚动照旧归 ScrollView / SwipeRefreshLayout
+            }
+        } catch (t: Throwable) {
+            SafeRun.w("TransitTab", t)
+        }
+    }
+
     private fun chip(text: String, colorHex: String): TextView = TextView(this).apply {
         val brand = Color.parseColor(colorHex)
         this.text = text
