@@ -197,13 +197,6 @@ android {
     }
 
     buildTypes {
-        // ★★ vc711：debug 版**改包名**，与正式版共存（抖音接口调研用）：
-        //   正式版 com.agent.idcode 日常用；调研版 com.agent.idcode.probe。
-        //   各自独立登录态与缓存，卸载调研版不影响正式版。
-        debug {
-            applicationIdSuffix = ".probe"
-            versionNameSuffix = "-probe"
-        }
         release {
             // ★ vc282：APK 8MB → 唯一大头是 dex 7.18MB（kotlin/coroutines/androidx 全量未裁）。
             //   开 R8 裁剪 + 资源收缩；keep 规则见 proguard-rules.pro
