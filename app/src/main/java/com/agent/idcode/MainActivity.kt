@@ -3633,6 +3633,9 @@ class MainActivity : Activity() {
         //   --ez debug_track_dump true 把快照/跟踪名单/设置落盘，adb pull 出来看
         intent?.getStringExtra("debug_notify")?.let { TrackNotifier.notifyTest(this, it) }
         if (intent?.getBooleanExtra("debug_track_run", false) == true) TrackScheduler.runNow(this)
+        // ★ vc711：抖音接口调研页（只靠这个额外参数进入，正式版界面零改动）
+        //   启动：am start -n <pkg>/com.agent.idcode.MainActivity --ez debug_dy_probe true
+        if (intent?.getBooleanExtra("debug_dy_probe", false) == true) DyProbe.open(this, root)
         if (intent?.getBooleanExtra("debug_track_dump", false) == true) dumpTrackState()
         if (intent?.getBooleanExtra("debug_dump_tb", false) == true) debugDumpTb = true
         // vc268d：A 路探测开关（⚠️ 调试参数只在 onCreate 读 ⇒ 必须 force-stop 后再 am start）
