@@ -11573,6 +11573,171 @@ class MainActivity : Activity() {
             setPadding((16 * dp).toInt(), (10 * dp).toInt(), (16 * dp).toInt(), (8 * dp).toInt())
         }
         addCard(card)
+        // ★ vc695 新增：权限与保活 —— 三个系统页跳转入口（通知使用权 / 电池优化白名单 / 特殊权限）
+        run {
+            val permCard = linearCard().apply { orientation = LinearLayout.VERTICAL }
+            permCard.addView(TextView(this).apply {
+                text = "权限与保活"
+                textSize = UiTok.T15
+                typeface = tfMedium
+                setTextColor(cTextPrimary)
+            })
+            permCard.addView(TextView(this).apply {
+                text = "通知使用权用于从通知里抓取件码；电池优化白名单与特殊权限用于后台保活"
+                textSize = UiTok.T12
+                setTextColor(cTextSecondary)
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (4 * dp).toInt() })
+            // ① 通知使用权（系统「通知使用权」列表页）
+            val permRow1 = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val btnNotifyListener = chip("通知使用权", "#5E6AD2")
+            btnNotifyListener.isClickable = true
+            btnNotifyListener.setOnClickListener {
+                try {
+                    startActivity(Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                } catch (t: Throwable) {
+                    SafeRun.w("MainActivity", t)
+                    appToast(this, "打不开通知使用权设置")
+                }
+            }
+            permRow1.addView(btnNotifyListener, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+            // ② 电池优化白名单（部分 ROM 不认 ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS ⇒ 退回列表页）
+            val btnBatteryOpt = chip("电池优化白名单", "#5E6AD2")
+            btnBatteryOpt.isClickable = true
+            btnBatteryOpt.setOnClickListener {
+                var opened = false
+                try {
+                    startActivity(Intent(
+                        android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        Uri.parse("package:$packageName")
+                    ))
+                    opened = true
+                } catch (t: Throwable) {
+                    SafeRun.w("MainActivity", t)
+                }
+                if (!opened) {
+                    try {
+                        startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                        opened = true
+                    } catch (t: Throwable) {
+                        SafeRun.w("MainActivity", t)
+                    }
+                }
+                if (!opened) appToast(this, "打不开电池优化设置")
+            }
+            permRow1.addView(btnBatteryOpt, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { leftMargin = (8 * dp).toInt() })
+            permCard.addView(permRow1, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (10 * dp).toInt() })
+            // ③ 特殊应用权限 / 后台运行（文案长，单独一行放，免得和上面两个挤一行被裁掉）
+            val permRow2 = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val btnSpecialAccess = chip("特殊应用权限 / 后台运行", "#5E6AD2")
+            btnSpecialAccess.isClickable = true
+            btnSpecialAccess.setOnClickListener {
+                var opened = false
+                try {
+                    startActivity(Intent(
+                        android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    ))
+                    opened = true
+                } catch (t: Throwable) {
+                    SafeRun.w("MainActivity", t)
+                }
+                if (!opened) {
+                    try {
+                        startActivity(Intent(
+                            "android.settings.APPLICATION_DETAILS_SETTINGS",
+                            Uri.parse("package:$packageName")
+                        ))
+                        opened = true
+                    } catch (t: Throwable) {
+                        SafeRun.w("MainActivity", t)
+                    }
+                }
+                if (!opened) {
+                    try {
+                        startActivity(Intent(android.provider.Settings.ACTION_SETTINGS))
+                        opened = true
+                    } catch (t: Throwable) {
+                        SafeRun.w("MainActivity", t)
+                    }
+                }
+                if (!opened) appToast(this, "打不开特殊权限设置")
+            }
+            permRow2.addView(btnSpecialAccess, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+            permCard.addView(permRow2, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (8 * dp).toInt() })
+            addCard(permCard)
+        }
+        // ★ vc695 新增：关于应用 —— 版本号运行时读 PackageInfo，不硬编码
+        run {
+            val aboutCard = linearCard().apply { orientation = LinearLayout.VERTICAL }
+            aboutCard.addView(TextView(this).apply {
+                text = "关于应用"
+                textSize = UiTok.T15
+                typeface = tfMedium
+                setTextColor(cTextPrimary)
+            })
+            val aboutInfo = try {
+                packageManager.getPackageInfo(packageName, 0)
+            } catch (t: Throwable) {
+                SafeRun.w("MainActivity", t)
+                null
+            }
+            val aboutAppName = try {
+                val label = aboutInfo?.applicationInfo?.loadLabel(packageManager)?.toString()
+                if (label.isNullOrBlank()) getString(R.string.app_name) else label
+            } catch (t: Throwable) {
+                SafeRun.w("MainActivity", t)
+                "蜉蝣·取件通"
+            }
+            val aboutVersion = try {
+                if (aboutInfo == null) {
+                    "版本未知"
+                } else {
+                    val vName = aboutInfo.versionName ?: "?"
+                    val vCode: Long = try {
+                        aboutInfo.longVersionCode
+                    } catch (t: Throwable) {
+                        aboutInfo.versionCode.toLong()
+                    }
+                    "$vName（内部版本 $vCode）"
+                }
+            } catch (t: Throwable) {
+                SafeRun.w("MainActivity", t)
+                "版本未知"
+            }
+            aboutCard.addView(TextView(this).apply {
+                text = "$aboutAppName $aboutVersion"
+                textSize = UiTok.T12
+                setTextColor(cTextPrimary)
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (4 * dp).toInt() })
+            aboutCard.addView(TextView(this).apply {
+                text = "包名 $packageName"
+                textSize = UiTok.T12
+                setTextColor(cTextSecondary)
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (2 * dp).toInt() })
+            addCard(aboutCard)
+        }
         // ★ vc415：新增「其他」分类（设置页最底部），导出日志归入该分类
         // ★ vc600：同志要求 —— 「其他」支持**折叠/展开**（默认展开，状态记忆到 SP）
         val otherCollapsed0 = prefs.getBoolean("settings_other_collapsed", false)
@@ -11663,13 +11828,6 @@ class MainActivity : Activity() {
         ) { openBlacklistPage() })
         // ★ vc417：「其他」里加免责声明（文案由同志定稿 2026-10-25）
         otherContent.addView(sourceRow("免责声明", "查看", true) { showDisclaimer() })
-        // ★ vc421：捐赠支持（自愿、不影响功能）
-        // 状态文字：正常正文色（深浅自适应）+ 75% 透明度 + 12sp
-        val donateHintColor = (cTextSecondary and 0x00FFFFFF) or ((255 * 0.75f).toInt() shl 24)
-        otherContent.addView(sourceRow(
-            "捐赠支持", "可以请作者一些token吗？", true,
-            statusColor = donateHintColor, statusSize = 12f
-        ) { showDonate() })
 
         // ⑥ 导出日志（vc268，同志 10-15 要求：导出 App 全部日志 + 自定义保存位置）
         //   机理：① `logcat -d` 一次性读出缓冲区里本应用的日志 —— Android 4.1 起 App
@@ -11678,56 +11836,6 @@ class MainActivity : Activity() {
         //   目录和文件名（下载/文档/任何地方都行），蜉蝣不申请任何存储权限。
         //   ★ vc330：改用上面的自建紧凑行 logRow（vc328 前是 sourceRow —— 共用件行高定死，
         //   撑不住"高度缩 1/3"的需求），点击 exportLogs() 弹另存为。
-
-        // ★ 底部署名 / 致谢（同志 2026-09-23 加）
-        //   位置：最后一张卡片之后、仍在 outer 的 16dp 内边距内 ⇒ 与卡片左右对齐。
-        //   口径：小字号 + 最暗的一级文字色（cTextFaint）+ 居中、可换行 ——
-        //   它是"致谢"不是"内容"，绝不能抢主体卡片的注意力。
-        // ★ vc264l（同志 03:52 要求）：把「灰太狼来啦」做成**蓝色可点击**，
-        //   点击跳酷安主页 https://www.coolapk.com/u/21170633
-        //   ★★ 实现方式说明：先试了 SpannableString + ClickableSpan，
-        //   实测点击无响应（设置页是带自定义手势的浮层，LinkMovementMethod 的触摸链路被拦）。
-        //   ⇒ 改用**双 TextView 横排**：蓝色那块用普通 setOnClickListener ——
-        //   与设置页其它可点击行（sourceRow 等）同一机制，那些都工作正常，最可靠。
-        outer.addView(LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            setPadding((8 * dp).toInt(), (6 * dp).toInt(), (8 * dp).toInt(), (28 * dp).toInt())
-            addView(TextView(this@MainActivity).apply {
-                text = "参考GitHub开源项目:ExpressAssistant   作者：酷安@"
-                textSize = 12f
-                setTextColor(cTextFaint)
-            })
-            addView(TextView(this@MainActivity).apply {
-                text = "灰太狼来啦"
-                textSize = 12f
-                setTextColor(cLink)          // ★ 蓝色（深浅模式自动适配）
-                isClickable = true
-                setOnClickListener {
-                    try {
-                        startActivity(
-                            Intent(
-                                Intent.ACTION_VIEW,
-                                Uri.parse("https://www.coolapk.com/u/21170633")
-                            )
-                        )
-                    } catch (e: ActivityNotFoundException) {
-                        appToast(this@MainActivity, "没找到能打开链接的应用")
-                    } catch (t: Throwable) { SafeRun.w("MainActivity", t) }
-                }
-                // 按下时轻微变淡（保持"致谢"该有的低调；不拦截事件，交给 click 处理）
-                setOnTouchListener { v, ev ->
-                    when (ev.action) {
-                        android.view.MotionEvent.ACTION_DOWN -> v.alpha = 0.55f
-                        android.view.MotionEvent.ACTION_UP,
-                        android.view.MotionEvent.ACTION_CANCEL -> v.alpha = 1f
-                    }
-                    false
-                }
-            })
-        }, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ))
 
         root.addView(layer, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
