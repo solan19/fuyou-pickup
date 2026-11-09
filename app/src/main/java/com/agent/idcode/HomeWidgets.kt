@@ -17,11 +17,11 @@ import org.json.JSONArray
  *
  * ## 有哪几个
  *   · 取件码 2×2 / 取件码 4×2 —— 待取件取件码格子（沿用旧 3×2 组件的数据链）
- *   · 途中快递 2×2 / 途中快递 4×2 —— 最新物流动态卡（状态词 + 承运商 + 最新轨迹 + 「全部快递 ×N」胶囊）
+ *   · 在途快递 2×2 / 在途快递 4×2 —— 最新物流动态卡（状态词 + 承运商 + 最新轨迹 + 「全部快递 ×N」胶囊）
  *
  * ## 数据从哪来（沿用旧 3×2 组件的设计：小组件自己【不联网】）
  *   · 取件码：MainActivity 拉完取件码后写 [KEY_WIDGET_CODES]（见 publishWidgetCodes），推给桌面。
- *   · 途中快递：后台 TrackWorker 每轮抓完写 ExpressStore 快照，Worker 里顺手调 [updateAll] 推给桌面。
+ *   · 在途快递：后台 TrackWorker 每轮抓完写 ExpressStore 快照，Worker 里顺手调 [updateAll] 推给桌面。
  *     快照过滤：只要"还在途"且**没有取件码**的件（有码的说明已到驿站待取，归取件码组件）。
  *
  * ## 样式（借鉴南风天气小组件；★ vc338 起只留浅/深两套底 + 自动切换）
@@ -44,7 +44,7 @@ object HomeWidgets {
     const val KEY_WIDGET_CODES = "widget_codes"
     /** 点取件码小组件 → 打开 App 直接进第 4 栏 */
     const val EXTRA_OPEN_PICKUP = "open_pickup"
-    /** 点途中快递小组件 → 打开 App 直接进第 5 栏 */
+    /** 点在途快递小组件 → 打开 App 直接进第 5 栏 */
     const val EXTRA_OPEN_TRANSIT = "open_transit"
 
     private const val PREFS = "idcode_prefs"
@@ -512,7 +512,7 @@ object HomeWidgets {
         mgr.updateAppWidget(id, v)
     }
 
-    // ---------------- 途中快递组件渲染 ----------------
+    // ---------------- 在途快递组件渲染 ----------------
 
     fun renderTransit(ctx: Context, mgr: AppWidgetManager, id: Int, big: Boolean) {
         val key = if (big) W_T4 else W_T2
@@ -635,7 +635,7 @@ class PickupWidget4x2 : AppWidgetProvider() {
     }
 }
 
-/** 途中快递小组件 2×2：状态词 + 承运商 + 最新一条动态 + 「全部快递 ×N」胶囊 */
+/** 在途快递小组件 2×2：状态词 + 承运商 + 最新一条动态 + 「全部快递 ×N」胶囊 */
 class TransitWidget2x2 : AppWidgetProvider() {
     override fun onUpdate(context: Context, mgr: AppWidgetManager, ids: IntArray) {
         for (id in ids) HomeWidgets.renderTransit(context, mgr, id, big = false)
@@ -647,7 +647,7 @@ class TransitWidget2x2 : AppWidgetProvider() {
     }
 }
 
-/** 途中快递小组件 4×2：同上，中部可多显示一条动态 */
+/** 在途快递小组件 4×2：同上，中部可多显示一条动态 */
 class TransitWidget4x2 : AppWidgetProvider() {
     override fun onUpdate(context: Context, mgr: AppWidgetManager, ids: IntArray) {
         for (id in ids) HomeWidgets.renderTransit(context, mgr, id, big = true)
