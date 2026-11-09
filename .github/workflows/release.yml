@@ -82,6 +82,15 @@ jobs:
           name: idcode-release-apk
           path: idcode-release.apk
 
+      # ★★ vc711：顺便出**调研版**（debug 包，包名 .probe，与正式版共存）
+      - name: 构建调研版 debug APK
+        run: |
+          set -e
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/*.apk idcode-probe-debug.apk
+          ls -l idcode-probe-debug.apk
+
       - name: 创建 Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -98,4 +107,6 @@ jobs:
             --title "$TAG · 蜉蝣·取件通 1.2.5" \
             --notes "自签名 release 包（versionCode 691 / versionName 1.2.5）。" \
             || gh release upload "$TAG" idcode-release.apk --clobber
+          # ★ vc711：调研版 debug 包挂同一个 Release（asset: idcode-probe-debug.apk）
+          gh release upload "$TAG" idcode-probe-debug.apk --clobber || true
           echo "release done: $TAG"
