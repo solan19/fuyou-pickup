@@ -15,6 +15,17 @@ dependencyResolutionManagement {
         //   ② 只留官方时，kotlin-compiler-embeddable 会从 Maven Central 跳到 GitHub Release，
         //      那里偶发 504（连着三次失败）。
         //   ⇒ 顺序改成 官方 → 镜像：正常走官方，官方 5xx 时 Gradle 会继续试后面的镜像。
+        // ★★ vc709：Kotlin 全家桶单独绑国内镜像（内容过滤）。
+        //   原因：kotlin-compiler-embeddable（60MB）在 Maven Central 会 302 到
+        //   github.com/JetBrains/... 的 release，那里频繁 504 —— 2026-11-09 连续 4 次构建
+        //   都死在这一步（runs 21/22/23/24），而它跟我们的代码毫无关系。
+        //   内容过滤只影响 org.jetbrains.kotlin（+ kotlinx），其它依赖仍按下面的顺序走官方源。
+        maven("https://maven.aliyun.com/repository/central") {
+            content {
+                includeGroup("org.jetbrains.kotlin")
+                includeGroup("org.jetbrains.kotlinx")
+            }
+        }
         google()
         mavenCentral()
         maven("https://maven.aliyun.com/repository/public")
