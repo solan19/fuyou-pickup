@@ -10408,6 +10408,53 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
         }
         val top = makeTopBar(getString(R.string.pickup_title), accent = "#0A9E7B")
+        // ★★ v1.3.1：顶栏「清已取 N」—— 一键删掉**所有已取件**的码（二次确认）。
+        //   放在顶栏而不是设置里（同志定）：取件就在这个页面，清理也该在这儿。
+        run {
+            fun pickedCountNow() = PddCodeStore.all(this).values.count { it.pickedAt != 0L }
+            val clearBtn = TextView(this).apply {
+                textSize = UiTok.T13
+                setTextColor(if (pickedCountNow() > 0) cAccent else cTextFaint)
+                setPadding((10 * dp).toInt(), (6 * dp).toInt(), (10 * dp).toInt(), (6 * dp).toInt())
+                isClickable = true
+            }
+            fun refreshClearBtn() {
+                val n = pickedCountNow()
+                clearBtn.text = if (n > 0) "清已取 $n" else "清已取"
+                clearBtn.setTextColor(if (n > 0) cAccent else cTextFaint)
+            }
+            refreshClearBtn()
+            clearBtn.setOnClickListener {
+                val n = pickedCountNow()
+                if (n == 0) {
+                    appToast(this, "没有已取件的快递")
+                } else {
+                    AlertDialog.Builder(this)
+                        .setTitle("清已取件")
+                        .setMessage("删除 $n 个「已取件」的取件码？待取的不会动。")
+                        .setPositiveButton("删除") { _, _ ->
+                            var del = 0
+                            for ((k, c) in PddCodeStore.all(this)) {
+                                if (c.pickedAt != 0L) {
+                                    PddCodeStore.remove(this, k)
+                                    del++
+                                }
+                            }
+                            Log.i("PickupClear", "一键清已取：删除 $del 条")
+                            appToast(this, "已清 $del 个已取件")
+                            // 收口：首页 + 组件 + 流体云 + 列表一次同步
+                            refreshClearBtn()
+                            runCatching { rebuildHome() }
+                            runCatching { refreshPickupBarSub() }
+                            runCatching { PickupPublish.publish(this, notifyNew = false) }
+                            runCatching { renderMerged() }
+                        }
+                        .setNegativeButton("取消", null)
+                        .showAnimated()
+                }
+            }
+            top.addView(clearBtn)
+        }
         // ★ vc264n（同志 04:16 要求）：删掉右上角刷新键 —— 手动刷新走**下拉手势**
         //   （vc264m 加的 SwipeRefreshLayout，触发 fetchPickup(keepCards=true)）
         attachTopBar(column, top)
@@ -12761,6 +12808,14 @@ class MainActivity : Activity() {
                 Log.i("PddCache", "已取件满 24h，清除取件码 $key")
                 PddCodeStore.remove(this, key)
                 cache.remove(key)
+                // ★★ v1.3.1：**清理后统一刷新**（审计发现的漏洞）——
+                //   原来只动缓存 ⇒ 首页「N 件待取」、桌面组件、流体云都还挂着已删掉的码。
+                //   这里延后一拍再刷（本条循环里可能连删多条，避免每条都重画一次）。
+                mainHandler.postDelayed({
+                    runCatching { rebuildHome() }
+                    runCatching { refreshPickupBarSub() }
+                    runCatching { PickupPublish.publish(this, notifyNew = false) }
+                }, 300L)
                 continue
             }
             // ★★ vc316（同志 2026-10-18 定）：**取消"取件后自动打标记"整条链**。
