@@ -874,6 +874,7 @@ class MainActivity : Activity() {
         val targets = if (allWb.size > capWb) allWb.take(capWb) else allWb
         if (targets.isEmpty()) { transitEnhanceBusyStart = 0L; return }
         var enhanced = 0
+        val batchStart = System.currentTimeMillis()
         fun next(idx: Int) {
             if (gen != transitEnhanceGen || transitLayer == null) {
                 // ★ vc342：作废路径必须**清零忙碌标记** —— 旧代码不清零，随后 2 分钟内的
@@ -893,6 +894,16 @@ class MainActivity : Activity() {
                 return
             }
             val sn = targets[idx]
+            // ★ vc704：**每批限时 20 秒**。一张物流页 3~5s + 1.2s 间隔，原来 10 单要一口气
+            //   跑 30~60 秒（冷缓存），期间整栏一直在"正在获取"；现在到点就收尾，
+            //   剩下的排到下一批（transitEnhanceAgain 已有），用户先看到已补好的那几张。
+            if (batchStart != 0L && System.currentTimeMillis() - batchStart > 20_000L) {
+                Log.i("TransitEnhance", "本批已跑 20s，剩余 ${targets.size - idx} 单排到下一批")
+                transitEnhanceBusyStart = 0L
+                transitEnhanceAgain = true
+                mainHandler.postDelayed({ enhancePddTransitTraces() }, 8_000L)
+                return
+            }
         val cached = pddTransitTraceCache[sn]
         // ★ vc255：15 分钟 → 6 小时。物流节点更新本来就不快，6h 与列表缓存口径一致；
         //   且落盘后这就是"冷启动要不要重开物流页"的唯一判据，放宽才省得到页面。
@@ -1056,8 +1067,33 @@ class MainActivity : Activity() {
                 hit = true
             }
         }
-        if (hit) renderInTransit()
+        if (hit) renderInTransitThrottled()
         return hit
+    }
+
+    /**
+     * ★ vc704：**渲染节流** —— 轨迹增强是"补一单重画一次"，10 单就是 10 次整栏重建
+     *  （当天实测 845 次渲染 / 6829 条裁决日志）。补码期间人眼看不出这十几次差别，
+     *  却要付整栏 View 重建的代价 ⇒ 合并到最多 1.5 秒一次；批量结束时强制补一次。
+     */
+    private var transitRenderAt = 0L
+    private var transitRenderPending = false
+
+    private fun renderInTransitThrottled() {
+        if (transitLayer == null) return
+        val now = System.currentTimeMillis()
+        val gap = now - transitRenderAt
+        if (gap >= 1_500L) {
+            transitRenderAt = now
+            renderInTransit()
+        } else if (!transitRenderPending) {
+            transitRenderPending = true
+            mainHandler.postDelayed({
+                transitRenderPending = false
+                transitRenderAt = System.currentTimeMillis()
+                if (transitLayer != null) renderInTransit()
+            }, 1_500L - gap)
+        }
     }
 
     /**
