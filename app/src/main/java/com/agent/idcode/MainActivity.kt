@@ -10691,7 +10691,8 @@ class MainActivity : Activity() {
                 setTextColor(cTextPrimary)
             })
             card.addView(TextView(this).apply {
-                text = "检查通知使用权、各平台登录态、取件码与在途缓存、后台轮询，"
+                // ★ vc702：原来这句以「，」结尾 —— 像被截断的半句话，设置页第一眼就是它。
+                text = "检查通知使用权、各平台登录态、取件码与在途缓存、后台轮询是否正常。"
                 textSize = UiTok.T12
                 setTextColor(cTextSecondary)
             }, LinearLayout.LayoutParams(
@@ -10821,7 +10822,9 @@ class MainActivity : Activity() {
             textSize = 15f
             setTextColor(cTextPrimary)
             buttonTintList = ColorStateList.valueOf(cTextPrimary)
-            setPadding(0, (10 * dp).toInt(), 0, (10 * dp).toInt())
+            // ★ vc702：与设置页其它行同一套左右内边距（原来 0 ⇒ 单选项比所有行都往左凸 16dp）
+            setPadding((UiTok.S16 * dp).toInt(), (10 * dp).toInt(),
+                       (UiTok.S16 * dp).toInt(), (10 * dp).toInt())
             isChecked = checked
         }
 
@@ -10856,7 +10859,9 @@ class MainActivity : Activity() {
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding((12 * dp).toInt(), (12 * dp).toInt(), (12 * dp).toInt(), (12 * dp).toInt())
+                // ★ vc702：与其它行统一到 S16
+                setPadding((UiTok.S16 * dp).toInt(), (12 * dp).toInt(),
+                           (UiTok.S16 * dp).toInt(), (12 * dp).toInt())
             }
             row.addView(TextView(this).apply {
                 text = getString(labelRes)
@@ -10894,7 +10899,8 @@ class MainActivity : Activity() {
             text = getString(R.string.settings_scheduled_hint)
             textSize = 12f
             setTextColor(cTextTertiary)
-            setPadding((12 * dp).toInt(), (8 * dp).toInt(), (12 * dp).toInt(), 0)
+            // ★ vc702：与其它行统一到 S16
+            setPadding((UiTok.S16 * dp).toInt(), (8 * dp).toInt(), (UiTok.S16 * dp).toInt(), 0)
         })
 
         // ---- 快递数据源：拼多多（应用内登录一次 → 之后才能抓到拼多多取件码）----
@@ -10998,7 +11004,9 @@ class MainActivity : Activity() {
         val pddHeader = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding((12 * dp).toInt(), (16 * dp).toInt(), (12 * dp).toInt(), (16 * dp).toInt())
+            // ★ vc702：与「快递数据源」里其它 sourceRow（S16）对齐 —— 原来 12dp 让"拼多多"比邻居左凸 4dp
+            setPadding((UiTok.S16 * dp).toInt(), (16 * dp).toInt(),
+                       (UiTok.S16 * dp).toInt(), (16 * dp).toInt())
             isClickable = true
         }
         pddHeader.addView(TextView(this).apply {
@@ -11199,7 +11207,9 @@ class MainActivity : Activity() {
         val kdRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding((12 * dp).toInt(), (16 * dp).toInt(), (12 * dp).toInt(), (16 * dp).toInt())
+            // ★ vc702：与同卡其它行统一到 S16
+            setPadding((UiTok.S16 * dp).toInt(), (16 * dp).toInt(),
+                       (UiTok.S16 * dp).toInt(), (16 * dp).toInt())
             isClickable = true
             setOnClickListener {
                 // ★ 这个弹窗从"只读的能力说明"升级成"说明 + 官方凭据配置" ——
@@ -11889,7 +11899,9 @@ class MainActivity : Activity() {
         val logRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding((12 * dp).toInt(), (9 * dp).toInt(), (12 * dp).toInt(), (9 * dp).toInt())
+            // ★ vc702：与其它行统一到 S16
+            setPadding((UiTok.S16 * dp).toInt(), (9 * dp).toInt(),
+                       (UiTok.S16 * dp).toInt(), (9 * dp).toInt())
             isClickable = true
             // ★ vc501：改走「4 档时间范围 → zip」的导出（旧 exportLogs 只导 logcat 缓冲区，已弃用）
             setOnClickListener { exportLogsRange() }
