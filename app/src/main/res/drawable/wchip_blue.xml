@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 途中快递组件：右上角承运商 chip 底（蓝色半透明圆角） -->
+<!-- 在途快递组件：右上角承运商 chip 底（蓝色半透明圆角） -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android">
     <solid android:color="#CC5E6AD2" />
     <corners android:radius="9dp" />
