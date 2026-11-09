@@ -69,6 +69,11 @@ object LiveUpdate {
     private const val ACTION_MANAGE_PROMOTED = "android.settings.APP_NOTIFICATION_PROMOTED_SETTINGS"
 
     private const val PREF = "idcode_prefs"
+    /** ★ vc704：状态栏芯片的字符预算 —— ColorOS 流体云实测约 10 个半角字符宽（与 1.3 同口径） */
+    private const val SHORT_TEXT_MAX = 10
+    /** ★ vc704：短文案规则的**版本号**。规则一改就 +1，并在 [migrateShortRules] 里补一段迁移 */
+    private const val KEY_SHORT_VER = "live_short_rule_ver"
+    private const val SHORT_VER = 2
     private const val KEY_POSTED = "live_posted_nos"
     /** ★ vc467：内容指纹（id → code|station|company 的 hash），**内容没变就不重发** */
     private const val KEY_FP = "live_fp"
@@ -201,6 +206,7 @@ fun setEnabled(ctx: Context, on: Boolean) {
      */
     fun sync(ctx: Context, entries: List<Entry>) {
         ensureChannel(ctx)
+        migrateShortRules(ctx)
         val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
 
         // ★★ vc699：**聚类** —— 未取件的取件码合并成**一条**通知（原来一个码一条）。
@@ -334,13 +340,47 @@ fun setEnabled(ctx: Context, on: Boolean) {
             }
     }
 
-    /** 状态栏芯片文案：去分隔符后塞得下就用码，塞不下再截 */
+    /**
+     * ★★ vc704：短文案规则的**版本迁移**（照 1.3 的做法）。
+     *
+     * 为什么要它：短文案的排版规则、通知 id 口径一变，**存量状态就会指错对象** ——
+     *  vc699 把「一个码一条通知」改成「聚类一条」后，老版本按单码 id 记的
+     *  `live_posted_nos` / 指纹表就指向了已经不存在的 id：
+     *   · 旧通知撤不掉 ⇒ 升级后流体云上会一直挂着几条僵尸卡；
+     *   · 指纹对不上 ⇒ 同一个码会重新弹一次。
+     * 迁移做法与 1.3 一致：读版本号 → 老版本就重写存量状态 → 写回新版本号（只跑一次）。
+     */
+    private fun migrateShortRules(ctx: Context) {
+        try {
+            val sp = ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+            val ver = sp.getInt(KEY_SHORT_VER, 1)
+            if (ver >= SHORT_VER) return
+            val legacy = postedIds(ctx)
+            val cluster = idOf("all")
+            val keep = legacy.filter { it == cluster }.toSet()
+            savePosted(ctx, keep)
+            saveFp(ctx, emptyMap())
+            saveTs(ctx, emptyMap())
+            sp.edit().putInt(KEY_SHORT_VER, SHORT_VER).apply()
+            Log.i(TAG, "短文案规则 v$ver → v$SHORT_VER：清掉 ${legacy.size - keep.size} 条旧单码记录（" +
+                    "升级前是「一个码一条通知」，那些 id 已经不存在了）")
+        } catch (t: Throwable) {
+            SafeRun.w(TAG, t)
+        }
+    }
+
+    /**
+     * ★ vc704：状态栏芯片文案 —— 预算 [SHORT_TEXT_MAX] 个半角字符。
+     *  1) 码本身就塞得下 ⇒ 原样（带分隔符更好读）
+     *  2) 去分隔符后塞得下 ⇒ 去分隔符（`29-3-7011` → `2937011`）
+     *  3) 还是超长 ⇒ **优先保尾号**（`...` 前缀略掉）—— 取件时对的是后几位，尾号最有辨识度
+     */
     private fun shortOf(code: String): String {
         val compact = code.replace("-", "").replace(" ", "")
         return when {
-            code.length <= 8 -> code
-            compact.length <= 8 -> compact
-            else -> compact.take(8)
+            code.length <= SHORT_TEXT_MAX -> code
+            compact.length <= SHORT_TEXT_MAX -> compact
+            else -> compact.takeLast(SHORT_TEXT_MAX - 1)
         }
     }
 
