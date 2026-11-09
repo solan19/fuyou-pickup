@@ -37,6 +37,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
+    <!--
+        ★ vc698：**主动申请**电池优化白名单（用户要求"别只给入口，要自己弹"）。
+          没有这条声明时，ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS 会被系统直接拒掉
+          —— 弹不出「允许后台运行」对话框，只能退到列表页让用户自己翻。
+          声明后才能启动时直接弹系统白名单对话框。
+    -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <!-- Shizuku（可选增强）：没装时全部逻辑静默降级，不影响任何基本功能 -->
     <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
 
