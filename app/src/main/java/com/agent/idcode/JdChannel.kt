@@ -98,7 +98,7 @@ object JdChannel {
     private var challenged = false
     private val main = Handler(Looper.getMainLooper())
 
-    /** 最近一次抓取的原始响应（途中快递栏用它做宽口径解析） */
+    /** 最近一次抓取的原始响应（在途快递栏用它做宽口径解析） */
     @Volatile
     var lastCaptures: List<Pair<String, String>> = emptyList()
         private set
@@ -555,7 +555,7 @@ object JdChannel {
         return out
     }
 
-    /** 途中快递栏的宽口径：一切**非终态**订单（运输中/派送中/待收货/待自提），带商品名和最新轨迹 */
+    /** 在途快递栏的宽口径：一切**非终态**订单（运输中/派送中/待收货/待自提），带商品名和最新轨迹 */
     fun parseInTransit(captures: List<Pair<String, String>>): ArrayList<JSONObject> {
         val out = ArrayList<JSONObject>()
         val seen = HashSet<String>()
