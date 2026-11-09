@@ -1947,6 +1947,21 @@ class MainActivity : Activity() {
             addAll(manualTransit)
             addAll(testTransit)   // ★ vc264p：测试物流（默认空，生产零影响）
         })
+        // ★★ v1.3.5：**删除取件码后，这件包裹也不该回到「途中快递」**。
+        //   删除动作 = 清掉码缓存 + 把这件包裹加进 pickup_muted（屏蔽名单）。
+        //   但码一没，它就满足途中栏"无码在途件"的收件条件 ⇒ 又被收进来
+        //   （同志 2026-11-09 截图：删掉的化妆棉/洗面奶/沐浴露全部回到在途栏）。
+        //   ⇒ 这里用**与取件码页同一份屏蔽名单、同一个判定函数**过滤，做到"删一次，两侧都消失"。
+        run {
+            val mutedNow = pickupMutedAll()
+            if (mutedNow.isNotEmpty()) {
+                val before = mergedTransit.size
+                mergedTransit.removeAll { q -> isPickupMuted(q.optString("src"), q, mutedNow) }
+                if (before != mergedTransit.size) {
+                    Log.i("PickupMuted", "途中栏按屏蔽名单剔除 ${before - mergedTransit.size} 件")
+                }
+            }
+        }
         // ★ vc640：所有来源在合并后统一剔除已明确完成的包裹。
         //   之前 manualTransit / 各平台缓存各走各的，导致状态已经显示“已签收”的卡仍留在途中栏。
         //   这里只处理明确终态；物流文案仍说运输中，或“已签收，待确认收货”时保留，
