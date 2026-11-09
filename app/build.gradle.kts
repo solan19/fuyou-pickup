@@ -192,11 +192,18 @@ android {
         // ★★ vc690：同志定 —— 对外版本 **1.2**，内部 versionCode **690**（紧接着历史的 682 往上）。
         //   以后每版在 690 基础上 +1；任何 ≤689 的旧包都无法覆盖安装。
         // ★★ vc691/692 → 对外 **1.2.5**，内部 **691**（同志 2026-11-04 14:44 要求提版本）。
-        versionCode = 708
-        versionName = "1.2.22"
+        versionCode = 709
+        versionName = "1.3.0"
     }
 
     buildTypes {
+        // ★★ vc711：debug 版**改包名**，与正式版共存（抖音接口调研用）：
+        //   正式版 com.agent.idcode 日常用；调研版 com.agent.idcode.probe。
+        //   各自独立登录态与缓存，卸载调研版不影响正式版。
+        debug {
+            applicationIdSuffix = ".probe"
+            versionNameSuffix = "-probe"
+        }
         release {
             // ★ vc282：APK 8MB → 唯一大头是 dex 7.18MB（kotlin/coroutines/androidx 全量未裁）。
             //   开 R8 裁剪 + 资源收缩；keep 规则见 proguard-rules.pro
