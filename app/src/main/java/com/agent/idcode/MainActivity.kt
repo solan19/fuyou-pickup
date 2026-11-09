@@ -1966,8 +1966,23 @@ class MainActivity : Activity() {
             val keepHint = listOf(
                 "到站", "待取", "入柜", "暂存", "代收", "驿站", "快递柜", "自提点", "派送", "已到"
             )
+            // ★★ v1.4.2：**订单状态豁免** —— 带「待收货/待确认收货/待确认」的一律放行。
+            //   这套终态过滤只看卡片**文本**，而拼多多极兔/中通末端代收时轨迹常冒出「已签收」，
+            //   但**订单状态仍是「待收货」（用户还没确认收货）** —— 件其实还在等他去取。
+            //   同志 2026-11-10 报：皇帝柑（261105-380203210271958 极兔单 JT5544361757046）
+            //   在 PddEnum 层被正确保留（「枚举 SIGN 但文案待收货=待确认，不按已取走剔除」），
+            //   却在这套合并层终态过滤里被「已签收 + 无驿站提示词」整条剔掉 ⇒ 先闪一下即消失。
+            //   两套逻辑打架：⇒ 状态还在等确认收货，就**不当终态**（与 PddEnum 同口径）。
+            val orderWaiting = listOf("待收货", "待确认收货", "待确认")
             val before = mergedTransit.size
             mergedTransit.removeAll { q ->
+                val orderStatus = q.optString("statusText")
+                if (orderWaiting.any { orderStatus.contains(it) }) {
+                    Log.i("TransitTerminal",
+                        "豁免[订单待收货] src=${q.optString("src")} sn=${q.optString("sn")} " +
+                        "wb=${q.optString("waybill")} 状态=「${orderStatus}」")
+                    return@removeAll false
+                }
                 val t = q.optString("statusText") + " " + q.optString("latest") + " " +
                         q.optString("traceLines")
                 if (strong.any { t.contains(it) }) return@removeAll true
