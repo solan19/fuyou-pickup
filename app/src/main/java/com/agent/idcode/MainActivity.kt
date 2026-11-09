@@ -10720,26 +10720,10 @@ class MainActivity : Activity() {
         // ★ vc693：自检卡 —— 各项功能是否正常一眼可见，还能模拟一条取件码通知。
         run {
             val card = linearCard().apply { orientation = LinearLayout.VERTICAL }
-            card.addView(TextView(this).apply {
-                text = "自检"
-                textSize = UiTok.T15
-                typeface = tfMedium
-                setTextColor(cTextPrimary)
-            })
-            card.addView(TextView(this).apply {
-                // ★ vc702：原来这句以「，」结尾 —— 像被截断的半句话，设置页第一眼就是它。
-                text = "检查通知使用权、各平台登录态、取件码与在途缓存、后台轮询是否正常。"
-                textSize = UiTok.T12
-                setTextColor(cTextSecondary)
-            }, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = (4 * dp).toInt() })
-            val runBtn = chip("运行自检", "#5E6AD2")
-            runBtn.isClickable = true
-            runBtn.setOnClickListener { showSelfTestDialog() }
-            card.addView(runBtn, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = (10 * dp).toInt() })
+            // ★ vc707：排版与其它卡统一 —— 分类标题 13sp 次级色；入口走标准行，不再是小胶囊
+            card.addView(sectionTitle("自检"))
+            card.addView(hintLine("检查通知使用权、各平台登录态、取件码与在途缓存、后台轮询是否正常。"))
+            card.addView(sourceRow("运行自检", "逐项列结果", true) { showSelfTestDialog() })
             addCard(card)
         }
 
@@ -11852,28 +11836,25 @@ class MainActivity : Activity() {
         addCard(card)
         // ★ vc695 新增：权限与保活 —— 三个系统页跳转入口（通知使用权 / 电池优化白名单 / 特殊权限）
         run {
+            // ★ vc707：排版与其它卡统一 —— 分类标题 13sp；三个入口 + 一键申请全部走 trackRow
             val permCard = linearCard().apply { orientation = LinearLayout.VERTICAL }
-            permCard.addView(TextView(this).apply {
-                text = "权限与保活"
-                textSize = UiTok.T15
-                typeface = tfMedium
-                setTextColor(cTextPrimary)
-            })
-            permCard.addView(TextView(this).apply {
-                text = "通知使用权用于从通知里抓取件码；电池优化白名单与特殊权限用于后台保活"
-                textSize = UiTok.T12
-                setTextColor(cTextSecondary)
-            }, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = (4 * dp).toInt() })
+            permCard.addView(sectionTitle("权限与保活"))
+            permCard.addView(hintLine(
+                "通知使用权用于从通知里抓取件码；电池优化白名单与特殊权限用于后台保活。"
+            ))
             // ① 通知使用权（系统「通知使用权」列表页）
+            // ★ vc707：竖排容器 —— 每个入口独占一行，与其它卡的行节奏一致
             val permRow1 = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
+                orientation = LinearLayout.VERTICAL
             }
-            val btnNotifyListener = chip("通知使用权", "#5E6AD2")
-            btnNotifyListener.isClickable = true
-            btnNotifyListener.setOnClickListener {
+            val btnNotifyListener: View = trackRow(
+                "通知使用权",
+                TextView(this).apply {
+                    text = if (notifListenerGranted()) "已开启" else "去系统设置 ›"
+                    textSize = 13f
+                    setTextColor(if (notifListenerGranted()) cTextSecondary else cTextTertiary)
+                }
+            ) {
                 try {
                     startActivity(Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
                 } catch (t: Throwable) {
@@ -11882,12 +11863,17 @@ class MainActivity : Activity() {
                 }
             }
             permRow1.addView(btnNotifyListener, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ))
             // ② 电池优化白名单（部分 ROM 不认 ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS ⇒ 退回列表页）
-            val btnBatteryOpt = chip("电池优化白名单", "#5E6AD2")
-            btnBatteryOpt.isClickable = true
-            btnBatteryOpt.setOnClickListener {
+            val btnBatteryOpt: View = trackRow(
+                "电池优化白名单",
+                TextView(this).apply {
+                    text = if (batteryExempt()) "已加入" else "去添加 ›"
+                    textSize = 13f
+                    setTextColor(if (batteryExempt()) cTextSecondary else cTextTertiary)
+                }
+            ) {
                 var opened = false
                 try {
                     startActivity(Intent(
@@ -11909,19 +11895,24 @@ class MainActivity : Activity() {
                 if (!opened) appToast(this, "打不开电池优化设置")
             }
             permRow1.addView(btnBatteryOpt, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { leftMargin = (8 * dp).toInt() })
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
             permCard.addView(permRow1, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = (10 * dp).toInt() })
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (UiTok.S4 * dp).toInt() })
             // ③ 特殊应用权限 / 后台运行（文案长，单独一行放，免得和上面两个挤一行被裁掉）
+            // ★ vc707：竖排容器（同上）
             val permRow2 = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
+                orientation = LinearLayout.VERTICAL
             }
-            val btnSpecialAccess = chip("特殊应用权限 / 后台运行", "#5E6AD2")
-            btnSpecialAccess.isClickable = true
-            btnSpecialAccess.setOnClickListener {
+            val btnSpecialAccess: View = trackRow(
+                "特殊应用权限 / 后台运行",
+                TextView(this).apply {
+                    text = "去系统设置 ›"
+                    textSize = 13f
+                    setTextColor(cTextTertiary)
+                }
+            ) {
                 var opened = false
                 try {
                     startActivity(Intent(
@@ -11954,27 +11945,25 @@ class MainActivity : Activity() {
                 if (!opened) appToast(this, "打不开特殊权限设置")
             }
             permRow2.addView(btnSpecialAccess, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ))
             permCard.addView(permRow2, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = (8 * dp).toInt() })
-            // ★ vc698：状态行 + 一键申请（用户要求：别只给入口，要能主动弹系统对话框）
-            val permStatus = TextView(this).apply {
-                text = permStatusLine()
-                textSize = UiTok.T12
-                setTextColor(cTextSecondary)
-            }
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+            // ★ vc698：状态行 + 一键申请（vc707 起排版对齐：状态用 12sp 三级灰说明行，
+            //   一键申请用标准行 + 右侧状态，不再是小胶囊）
+            val permStatus = hintLine(permStatusLine())
             permCard.addView(permStatus, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = (10 * dp).toInt() })
-            val permRow3 = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-            val btnRequestCore = chip("一键申请权限", "#2E9E5B")
-            btnRequestCore.isClickable = true
-            btnRequestCore.setOnClickListener {
+            ).apply { topMargin = (UiTok.S4 * dp).toInt() })
+            val btnRequestCore: View = trackRow(
+                "一键申请权限",
+                TextView(this).apply {
+                    text = "通知 + 电池白名单"
+                    textSize = 13f
+                    setTextColor(cTextTertiary)
+                }
+            ) {
                 try {
                     getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                         .putLong("perm_prompt_at", System.currentTimeMillis()).apply()
@@ -11984,23 +11973,16 @@ class MainActivity : Activity() {
                     SafeRun.w("Perm", t)
                 }
             }
-            permRow3.addView(btnRequestCore, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            permCard.addView(btnRequestCore, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ))
-            permCard.addView(permRow3, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = (8 * dp).toInt() })
             addCard(permCard)
         }
         // ★ vc695 新增：关于应用 —— 版本号运行时读 PackageInfo，不硬编码
         run {
+            // ★ vc707：排版与其它卡统一 —— 分类标题 13sp 次级色；两行信息走标准行规格
             val aboutCard = linearCard().apply { orientation = LinearLayout.VERTICAL }
-            aboutCard.addView(TextView(this).apply {
-                text = "关于应用"
-                textSize = UiTok.T15
-                typeface = tfMedium
-                setTextColor(cTextPrimary)
-            })
+            aboutCard.addView(sectionTitle("关于应用"))
             val aboutInfo = try {
                 packageManager.getPackageInfo(packageName, 0)
             } catch (t: Throwable) {
@@ -12030,20 +12012,8 @@ class MainActivity : Activity() {
                 SafeRun.w("MainActivity", t)
                 "版本未知"
             }
-            aboutCard.addView(TextView(this).apply {
-                text = "$aboutAppName $aboutVersion"
-                textSize = UiTok.T12
-                setTextColor(cTextPrimary)
-            }, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = (4 * dp).toInt() })
-            aboutCard.addView(TextView(this).apply {
-                text = "包名 $packageName"
-                textSize = UiTok.T12
-                setTextColor(cTextSecondary)
-            }, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = (2 * dp).toInt() })
+            aboutCard.addView(infoRow(aboutAppName, aboutVersion))
+            aboutCard.addView(infoRow("包名", packageName))
             addCard(aboutCard)
         }
         // ★ vc415：新增「其他」分类（设置页最底部），导出日志归入该分类
@@ -16033,6 +16003,59 @@ class MainActivity : Activity() {
     } catch (t: Throwable) {
         SafeRun.w("PickupLabel", t)
         "待取件 2026-11-09 08:41 您的快件已到达[代收点](菜鸟驿站)北门 3 号智能柜"
+    }
+
+    /**
+     * ★ vc707：设置页的「只读信息行」—— 行规格（行高/左右内边距/字号）与 sourceRow、
+     *  trackRow、switchRow **完全一致**，只是行尾没有箭头、也不可点。
+     *
+     * 为什么需要它：自检 / 权限与保活 / 关于应用这三张卡原来是"分类大标题(15sp 加粗主色) +
+     *  正文段落 + 11sp 小胶囊按钮"的排版，跟设置页其它卡（分类标题 13sp 次级色、内容一律是
+     *  15sp 主文的行）不是一个体系 —— 同志说的"突兀"就是这一层字体与排版的不统一。
+     */
+    private fun infoRow(label: String, value: String): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = (UiTok.ROW_H * dp).toInt()
+            setPadding((UiTok.S16 * dp).toInt(), (UiTok.S12 * dp).toInt(),
+                       (UiTok.S16 * dp).toInt(), (UiTok.S12 * dp).toInt())
+        }
+        row.addView(TextView(this).apply {
+            text = label
+            textSize = UiTok.T15
+            setTextColor(cTextPrimary)
+        })
+        row.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+        if (value.isNotBlank()) {
+            row.addView(TextView(this).apply {
+                text = value
+                textSize = 13f
+                setTextColor(cTextSecondary)
+                maxLines = 1
+                gravity = Gravity.END
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }, LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+            ).apply { rightMargin = (UiTok.S8 * dp).toInt() })
+        }
+        return row
+    }
+
+    /** ★ vc707：分类标题 —— 与 collapsibleHeader 同一套字号/颜色（13sp · 次级色 · 不加粗） */
+    private fun sectionTitle(text: String): TextView = TextView(this).apply {
+        this.text = text
+        textSize = UiTok.T13
+        setTextColor(cTextSecondary)
+    }
+
+    /** ★ vc707：卡内说明行（12sp · 三级灰 · 左右内边距与行对齐） */
+    private fun hintLine(text: String): TextView = TextView(this).apply {
+        this.text = text
+        textSize = UiTok.T12
+        setTextColor(cTextTertiary)
+        setPadding((UiTok.S16 * dp).toInt(), (UiTok.S4 * dp).toInt(),
+                   (UiTok.S16 * dp).toInt(), (UiTok.S8 * dp).toInt())
     }
 
     /**
