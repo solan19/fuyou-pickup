@@ -2855,7 +2855,7 @@ class MainActivity : Activity() {
      * 顺序与 [handleBack] 完全一致，改一边记得改另一边。
      * 全都没开 ⇒ null，表示**在主页**。
      */
-    private fun topLayer(): View? = whaleStyleLayer ?: widgetStyleLayer ?: settingsLayer ?: webLayer ?: transitLayer ?: pickupLayer
+    private fun topLayer(): View? = labelLayer ?: whaleStyleLayer ?: widgetStyleLayer ?: settingsLayer ?: webLayer ?: transitLayer ?: pickupLayer
 
     /** 本次手势的跟手目标（开始时就定好，中途不换）。null = 这次返回"不关层"，不该跟手 */
     @Volatile
@@ -11542,6 +11542,25 @@ class MainActivity : Activity() {
             prefs.edit().putBoolean("auto_refresh_on_open", on).apply()
             Log.i("Settings", "自动刷新 = $on")
         })
+        // ★ vc705：「取件位置标签」规则（1.3 特性移植）——
+        //   把一整句驿站原文压成"北门 3 号柜"这种人话；规则可增删、可试测。
+        run {
+            val labelCount = PickupLabel.load(this).size
+            val labelStatus = TextView(this).apply {
+                text = if (labelCount > 0) "已配置 $labelCount 条 · 点击管理" else "点击添加规则",
+                textSize = 13f
+                setTextColor(cTextSecondary)
+            }
+            card.addView(trackRow("取件位置标签", labelStatus,
+                onMoreClick = {
+                    infoDialog(
+                        "取件位置标签",
+                        "驿站/代收点的原文常常是一整句（取件时间、状态、站名混在一起），界面放不下。" +
+                                "这里配规则：匹配文字（支持 * 通配）→ 显示成；" +
+                                "命中就停 = 这条改完就结束，继续 = 让后面的规则接着改。"
+                    )
+                }) { openLabelRulesPage(labelStatus) })
+        }
         // 通知权限：Android 13+ 没这个权限，通知会被系统**静默丢弃** —— 必须显式提示，
         // 否则用户会以为"功能坏了"。授权后这行自动消失（openSettings 会重建）。
         if (!TrackNotifier.canNotify(this)) {
@@ -14342,7 +14361,14 @@ class MainActivity : Activity() {
         var name = raw.substring(startIdx.coerceIn(0, end), end).trim()
         // 名字仍过长 ⇒ 取最后 24 字（驿站名都在尾部）
         if (name.length > 24) name = name.takeLast(24).trim()
-        return name
+        // ★ vc705：最后过一遍用户的「取件位置标签」规则（1.3 特性移植）——
+        //   规则在设置页里配，这里是唯一出口，卡片 / 通知 / 明细行都会跟着变。
+        return try {
+            PickupLabel.apply(this, name)
+        } catch (t: Throwable) {
+            SafeRun.w("PickupLabel", t)
+            name
+        }
     }
 
     /**
@@ -15784,6 +15810,232 @@ class MainActivity : Activity() {
     }
 
     /**
+     * ★ vc705：**取件位置标签**规则管理页（1.3 特性移植）。
+     *
+     * 结构与 1.3 一致：上面是已有规则列表（匹配文字 → 显示成 · 命中就停/继续），
+     * 下面是「添加一条规则」表单（匹配文字 + 显示成 + 优先级 + 试一下）。
+     * 1.3 的原话是"先在输入框写一条匹配文字，再用它试"——试测样本直接取库里真实的驿站原文。
+     */
+    private fun openLabelRulesPage(statusTv: TextView?) {
+        if (labelLayer != null) return
+        val layer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(cBg)
+        }
+        attachTopBar(layer, makeTopBar("取件位置标签"))
+        val scroll = ScrollView(this)
+        val outer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding((16 * dp).toInt(), (16 * dp).toInt(), (16 * dp).toInt(), (24 * dp).toInt())
+        }
+        scroll.addView(outer)
+        layer.addView(scroll, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
+        ))
+
+        var rules = PickupLabel.load(this)
+
+        fun refreshStatus() {
+            statusTv?.text =
+                if (rules.isEmpty()) "点击添加规则" else "已配置 ${rules.size} 条 · 点击管理"
+        }
+
+        fun rebuild() {
+            outer.removeAllViews()
+            outer.addView(TextView(this).apply {
+                text = "把取件位置的原文压成你想看的短标签。匹配文字支持 * 通配；" +
+                        "显示成留空 = 直接用匹配到的那段原文。"
+                textSize = UiTok.T12
+                setTextColor(cTextSecondary)
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = (12 * dp).toInt() })
+
+            val listCard = linearCard().apply { orientation = LinearLayout.VERTICAL }
+            listCard.addView(TextView(this).apply {
+                text = if (rules.isEmpty()) "还没有规则" else "已有规则"
+                textSize = UiTok.T15
+                typeface = tfMedium
+                setTextColor(cTextPrimary)
+            })
+            for ((i, r) in rules.withIndex()) {
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    minimumHeight = (UiTok.ROW_H * dp).toInt()
+                    setPadding(0, (UiTok.S12 * dp).toInt(), 0, (UiTok.S12 * dp).toInt())
+                    isClickable = true
+                    isLongClickable = true
+                }
+                row.addView(TextView(this).apply {
+                    text = r.match + "  →  " + r.show.ifBlank { "（原文）" } +
+                            if (r.stop) "  ·  命中就停" else "  ·  继续"
+                    textSize = 14f
+                    setTextColor(cTextPrimary)
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                row.setOnLongClickListener {
+                    val list = PickupLabel.load(this).toMutableList()
+                    if (i in list.indices) list.removeAt(i)
+                    PickupLabel.save(this, list)
+                    rules = PickupLabel.load(this)
+                    appToast(this, "已删除这条规则")
+                    refreshStatus()
+                    rebuild()
+                    true
+                }
+                listCard.addView(row, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ))
+            }
+            if (rules.isNotEmpty()) {
+                listCard.addView(TextView(this).apply {
+                    text = "长按某条可删除"
+                    textSize = 12f
+                    setTextColor(cTextTertiary)
+                    setPadding(0, (6 * dp).toInt(), 0, 0)
+                })
+            }
+            outer.addView(listCard, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = (16 * dp).toInt() })
+
+            val form = linearCard().apply { orientation = LinearLayout.VERTICAL }
+            form.addView(TextView(this).apply {
+                text = "添加一条规则"
+                textSize = UiTok.T15
+                typeface = tfMedium
+                setTextColor(cTextPrimary)
+            })
+            fun input(hintText: String): android.widget.EditText = android.widget.EditText(this).apply {
+                hint = hintText
+                textSize = 15f
+                setTextColor(cTextPrimary)
+                setHintTextColor(cTextTertiary)
+                setSingleLine(true)
+                val p = (12 * dp).toInt()
+                setPadding(p, p / 2, p, p / 2)
+            }
+            val matchIn = input("匹配文字，如 北门*号快递柜")
+            val showIn = input("显示成，如 北门柜（可留空）")
+            form.addView(matchIn, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (10 * dp).toInt() })
+            form.addView(showIn, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (8 * dp).toInt() })
+
+            var stopMode = true
+            val rStop = RadioButton(this).apply {
+                text = "命中就停"
+                textSize = 15f
+                setTextColor(cTextPrimary)
+                buttonTintList = android.content.res.ColorStateList.valueOf(cTextPrimary)
+                isChecked = true
+                setPadding(0, (8 * dp).toInt(), 0, (8 * dp).toInt())
+            }
+            val rPass = RadioButton(this).apply {
+                text = "继续"
+                textSize = 15f
+                setTextColor(cTextPrimary)
+                buttonTintList = android.content.res.ColorStateList.valueOf(cTextPrimary)
+                setPadding((12 * dp).toInt(), (8 * dp).toInt(), 0, (8 * dp).toInt())
+            }
+            val grp = RadioGroup(this).apply {
+                orientation = RadioGroup.HORIZONTAL
+                addView(rStop)
+                addView(rPass)
+                setOnCheckedChangeListener { _, id -> stopMode = (id == rStop.id) }
+            }
+            form.addView(grp, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (6 * dp).toInt() })
+
+            val testTv = TextView(this).apply {
+                textSize = 13f
+                setTextColor(cTextSecondary)
+                visibility = View.GONE
+                setPadding(0, (8 * dp).toInt(), 0, 0)
+            }
+            form.addView(testTv, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+
+            val btnRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val testBtn = chip("试一下", "#5E6AD2").apply {
+                isClickable = true
+                setOnClickListener {
+                    val sample = sampleStationText()
+                    val r = PickupLabel.tryOne(
+                        matchIn.text.toString(), showIn.text.toString(), sample
+                    )
+                    testTv.visibility = View.VISIBLE
+                    if (r == null) {
+                        testTv.setTextColor(cTextTertiary)
+                        testTv.text = "这条匹配写法用不了，换一条试试。\n试测样本：" + sample
+                    } else {
+                        testTv.setTextColor(cTextSecondary)
+                        testTv.text = "试测结果：" + r + "\n试测样本：" + sample
+                    }
+                }
+            }
+            val addBtn = chip("添加这条规则", "#2E9E5B").apply {
+                isClickable = true
+                setOnClickListener {
+                    val m = matchIn.text.toString().trim()
+                    if (m.isEmpty()) {
+                        appToast(this, "先写要匹配的文字")
+                    } else {
+                        val list = PickupLabel.load(this).toMutableList()
+                        list.add(PickupLabel.Rule(m, showIn.text.toString().trim(), stopMode))
+                        PickupLabel.save(this, list)
+                        rules = PickupLabel.load(this)
+                        refreshStatus()
+                        appToast(this, "已添加")
+                        rebuild()
+                    }
+                }
+            }
+            btnRow.addView(testBtn)
+            btnRow.addView(addBtn, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { leftMargin = (8 * dp).toInt() })
+            form.addView(btnRow, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (10 * dp).toInt() })
+            outer.addView(form, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+        }
+
+        rebuild()
+        refreshStatus()
+        root.addView(layer, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
+        ))
+        labelLayer = layer
+        layerIn(layer)
+    }
+
+    private var labelLayer: LinearLayout? = null
+
+    private fun closeLabelPage() {
+        labelLayer?.let { root.removeView(it) }
+        labelLayer = null
+    }
+
+    /** 试测样本：优先用库里最后一条取件码卡的驿站原文，没有就给个示例句 */
+    private fun sampleStationText(): String = try {
+        PddCodeStore.all(this).values.lastOrNull { it.station.isNotBlank() }?.station?.take(80)
+            ?: "待取件 2026-11-09 08:41 您的快件已到达[代收点](菜鸟驿站)北门 3 号智能柜"
+    } catch (t: Throwable) {
+        SafeRun.w("PickupLabel", t)
+        "待取件 2026-11-09 08:41 您的快件已到达[代收点](菜鸟驿站)北门 3 号智能柜"
+    }
+
+    /**
      * ★ vc703：设置页统一的「这一行是干什么的」说明弹窗 ——
      *   与 sourceRow / trackRow / switchRow 的 ⓘ 同一个出口，样式（showAnimated）也一致。
      */
@@ -16343,6 +16595,11 @@ class MainActivity : Activity() {
         // 截取编辑器压在小组件设置页上 ⇒ 最先关它（vc294）
         if (widgetCropLayer != null) {
             closeWidgetCrop()
+            return true
+        }
+        // ★ vc705：位置标签规则页（压在设置页上）⇒ 优先关它
+        if (labelLayer != null) {
+            closeLabelPage()
             return true
         }
         // 黑名单页（压在设置页上）⇒ 优先关它
