@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 途中快递组件：最新动态左侧的蓝色小标签底 -->
+<!-- 在途快递组件：最新动态左侧的蓝色小标签底 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android">
     <solid android:color="#FF5E6AD2" />
     <corners android:radius="6dp" />
