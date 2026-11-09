@@ -78,7 +78,7 @@
 
         <!--
             桌面小组件（vc289，替换旧 3×2 取件码组件）：
-            取件码 2×2 / 4×2 + 途中快递 2×2 / 4×2，渲染与数据统一在 HomeWidgets。
+            取件码 2×2 / 4×2 + 在途快递 2×2 / 4×2，渲染与数据统一在 HomeWidgets。
             updatePeriodMillis=0：组件不自己联网，App/后台轮询拉完数据主动推（HomeWidgets.updateAll）。
         -->
         <receiver
