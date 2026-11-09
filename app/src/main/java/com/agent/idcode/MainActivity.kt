@@ -3442,6 +3442,10 @@ class MainActivity : Activity() {
             insets
         }
         root.post { root.requestApplyInsets() }
+        // ★ vc698：**主动申请**权限（通知 \/ 电池优化白名单）—— 用户要求别只给入口。
+        //   放到 insets 之后（界面已就绪）再弹，免得对话框先于界面出现；
+        //   3 天内弹过就不再打扰，设置页里始终有手动入口。
+        mainHandler.postDelayed({ maybeAutoRequestPermissions() }, 1_200L)
 
         // ★ 流体云：启动时**先从持久化快照补推一次**。
         //   这样 App 一打开实况位上就有码，不用等抓取；也免得某个源临时失效
@@ -11750,6 +11754,37 @@ class MainActivity : Activity() {
             permCard.addView(permRow2, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { topMargin = (8 * dp).toInt() })
+            // ★ vc698：状态行 + 一键申请（用户要求：别只给入口，要能主动弹系统对话框）
+            val permStatus = TextView(this).apply {
+                text = permStatusLine()
+                textSize = UiTok.T12
+                setTextColor(cTextSecondary)
+            }
+            permCard.addView(permStatus, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (10 * dp).toInt() })
+            val permRow3 = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val btnRequestCore = chip("一键申请权限", "#2E9E5B")
+            btnRequestCore.isClickable = true
+            btnRequestCore.setOnClickListener {
+                try {
+                    getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                        .putLong("perm_prompt_at", System.currentTimeMillis()).apply()
+                    requestCorePermissions()
+                    mainHandler.postDelayed({ permStatus.text = permStatusLine() }, 2_500L)
+                } catch (t: Throwable) {
+                    SafeRun.w("Perm", t)
+                }
+            }
+            permRow3.addView(btnRequestCore, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+            permCard.addView(permRow3, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (8 * dp).toInt() })
             addCard(permCard)
         }
         // ★ vc695 新增：关于应用 —— 版本号运行时读 PackageInfo，不硬编码
@@ -14856,6 +14891,12 @@ class MainActivity : Activity() {
         val ok = TrackNotifier.canNotify(this)
         appToast(this, if (ok) "通知已开启" else "没拿到通知权限：请到系统设置里手动允许「通知」", true)
         if (ok) refreshSettingsIfOpen()
+        // ★ vc698：自动申请的第二段 —— 通知对话框关掉之后，再弹电池优化白名单
+        //   （两个系统对话框不能同时弹，只能串起来）
+        if (autoPermFlow) {
+            autoPermFlow = false
+            mainHandler.postDelayed({ requestBatteryExemption() }, 700L)
+        }
     }
 
     private fun refreshPickupBarSub() {
@@ -15336,6 +15377,103 @@ class MainActivity : Activity() {
         } catch (t: Throwable) {
             SafeRun.w("TransitTab", t)
         }
+    }
+
+    // ---------------- ★ vc698：权限主动申请 ----------------
+
+    /** 自动申请流程进行中（通知对话框 → 关掉后再弹电池白名单） */
+    private var autoPermFlow = false
+
+    private fun notifGranted(): Boolean {
+        if (android.os.Build.VERSION.SDK_INT < 33) return true
+        return try {
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
+                    android.content.pm.PackageManager.PERMISSION_GRANTED
+        } catch (t: Throwable) {
+            SafeRun.w("Perm", t)
+            true
+        }
+    }
+
+    /** 通知使用权（NotificationListenerService 是否勾上）—— 从系统安全设置里读，无权限也能读自己 */
+    private fun notifListenerGranted(): Boolean = try {
+        android.provider.Settings.Secure.getString(
+            contentResolver, "enabled_notification_listeners"
+        ).orEmpty().contains(packageName)
+    } catch (t: Throwable) {
+        SafeRun.w("Perm", t)
+        false
+    }
+
+    private fun batteryExempt(): Boolean = try {
+        val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
+        pm.isIgnoringBatteryOptimizations(packageName)
+    } catch (t: Throwable) {
+        SafeRun.w("Perm", t)
+        false
+    }
+
+    /** 弹系统「电池优化白名单」对话框（Manifest 已声明 REQUEST_IGNORE_BATTERY_OPTIMIZATIONS） */
+    private fun requestBatteryExemption() {
+        if (batteryExempt()) return
+        var opened = false
+        try {
+            startActivity(Intent(
+                android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                Uri.parse("package:$packageName")
+            ))
+            opened = true
+        } catch (t: Throwable) {
+            SafeRun.w("Perm", t)
+        }
+        if (!opened) {
+            try {
+                startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                opened = true
+            } catch (t: Throwable) {
+                SafeRun.w("Perm", t)
+            }
+        }
+        if (!opened) appToast(this, "打不开电池优化设置")
+    }
+
+    /** 一键申请：通知 → 电池白名单（两个系统对话框不能同时弹，只能串起来） */
+    private fun requestCorePermissions() {
+        autoPermFlow = true
+        if (!notifGranted()) {
+            requestNotifPermission()
+            return
+        }
+        autoPermFlow = false
+        requestBatteryExemption()
+    }
+
+    /** 启动时自动弹一次；3 天内弹过就跳过（设置页仍有手动入口） */
+    private fun maybeAutoRequestPermissions() {
+        try {
+            val sp = getSharedPreferences(PREFS, MODE_PRIVATE)
+            val needNotif = !notifGranted()
+            val needBatt = !batteryExempt()
+            if (!needNotif && !needBatt) return
+            val last = sp.getLong("perm_prompt_at", 0L)
+            if (last != 0L && System.currentTimeMillis() - last < 3L * 24 * 3600_000L) {
+                Log.i("Perm", "权限申请 3 天内已弹过，本轮跳过（通知缺=$needNotif 白名单缺=$needBatt）")
+                return
+            }
+            sp.edit().putLong("perm_prompt_at", System.currentTimeMillis()).apply()
+            Log.i("Perm", "自动申请权限：通知缺=$needNotif 电池白名单缺=$needBatt")
+            requestCorePermissions()
+        } catch (t: Throwable) {
+            SafeRun.w("Perm", t)
+        }
+    }
+
+    /** 「权限与保活」卡上的状态行 */
+    private fun permStatusLine(): String {
+        val a = if (notifGranted()) "通知：已开启" else "通知：未开启"
+        val b = if (notifListenerGranted()) "通知使用权：已开" else "通知使用权：未开"
+        val c = if (batteryExempt()) "电池白名单：已加" else "电池白名单：未加"
+        return "$a · $b · $c"
     }
 
     private fun chip(text: String, colorHex: String): TextView = TextView(this).apply {
