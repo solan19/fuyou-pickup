@@ -8281,7 +8281,11 @@ class MainActivity : Activity() {
         try {
             val c = PddCodeStore.all(this)[key]
             if (c != null) {
-                PddCodeStore.put(
+                // ★★ v1.3.2：这里必须走 **putForce** ——
+                //   `put()` 有一条"新值 pickedAt=0 就沿用旧值"的保护（vc655 加的，防抓取回写抹掉标记），
+                //   而"取消已取件"恰恰要把 pickedAt 显式写成 0 ⇒ 用 put 会被那条保护改回去，取消无效。
+                //   putForce 就是为这个场景准备的（PddCodeStore 里原本就有）。
+                PddCodeStore.putForce(
                     this, key,
                     c.copy(pickedAt = if (on) System.currentTimeMillis() else 0L)
                 )
