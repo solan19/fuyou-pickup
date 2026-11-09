@@ -10493,6 +10493,15 @@ class MainActivity : Activity() {
                             var del = 0
                             for ((k, c) in PddCodeStore.all(this)) {
                                 if (c.pickedAt != 0L) {
+                                    // ★★ v1.3.8：**一键清已取也必须写屏蔽名单**。
+                                    //   同志实测：长按删除不会让快递回到在途栏（因为写了名单），
+                                    //   而右上角「清已取」只删缓存、没写名单 ⇒ 这单退化成
+                                    //   "无码在途件"又被在途栏收回来。这里补齐与长按删除同一套身份。
+                                    MuteStore.add(this, k)
+                                    if (c.code.isNotBlank()) MuteStore.add(this, c.code)
+                                    if (c.waybill.isNotBlank()) {
+                                        MuteStore.add(this, "${c.src}:${c.waybill}")
+                                    }
                                     PddCodeStore.remove(this, k)
                                     del++
                                 }
