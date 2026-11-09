@@ -62,12 +62,53 @@ class IdNotifyListener : NotificationListenerService() {
         val code = pickCode(text)
         if (code.isBlank()) {
             Log.i(TAG, "像快递消息但没抠到取件码（来源 ${sbn.packageName}）")
+            // ★ vc708：「到站 / 派件」这类没有码的通知同样值得立刻抓一轮 ——
+            //   码本来就该由接口给，通知只是**触发器**。
+            maybeTriggerImmediateFetch(sbn.packageName)
             return
         }
         Log.i(TAG, "从通知里抠到取件码 $code（来源 ${sbn.packageName}）")
         // ★ vc692：先把码写进取件码缓存（用户要求），再照旧弹通知
         persistCode(text, code)
         TrackNotifier.notifyUpdate(this, "ntf:$code", "", "通知里的取件码 $code")
+        // ★★ vc708：**即时发布** —— 码已经进缓存了，立刻推一次小组件/流体云，
+        //   不必等下一轮后台抓取（notifyNew=false：上面那条通知已经提醒过用户，别重复打扰）。
+        try {
+            PickupPublish.publish(this, notifyNew = false)
+        } catch (t: Throwable) {
+            SafeRun.w(TAG, t)
+        }
+        // ★ vc708：顺手触发一次即时抓取（补齐轨迹、地址、其它平台的码），5 分钟节流。
+        maybeTriggerImmediateFetch(sbn.packageName)
+    }
+
+    /**
+     * ★★ vc708：**事件驱动即时抓取**。
+     *
+     * 为什么需要：后台轮询走 WorkManager 周期任务，周期下限 15 分钟、系统还会再延后，
+     * 所以"快递刚到"最长要等一轮才推（同志的实测感受就是"有延迟"）。
+     * 而快递类通知**到得比轮询准**：到站 / 派件 / 取件码这些通知一来，我们就知道该查了。
+     * 于是把通知当成触发器：立刻投一次一次性抓取（[TrackScheduler.runNow]）→
+     * 抓到码后 [PickupPublish] 立刻推小组件 / 流体云 / 通知。
+     *
+     * 5 分钟节流：同一波通知（可能连发好几条）只触发一次，避免把接口打爆。
+     */
+    private fun maybeTriggerImmediateFetch(pkg: String) {
+        try {
+            val sp = getSharedPreferences("idcode_prefs", MODE_PRIVATE)
+            val now = System.currentTimeMillis()
+            val last = sp.getLong("notify_fetch_at", 0L)
+            val gap = now - last
+            if (gap < 5 * 60_000L) {
+                Log.i(TAG, "通知触发抓取：${gap / 1000}s 前刚跑过，跳过（来源 $pkg）")
+                return
+            }
+            sp.edit().putLong("notify_fetch_at", now).apply()
+            Log.i(TAG, "通知触发即时抓取（来源 $pkg）")
+            TrackScheduler.runNow(this)
+        } catch (t: Throwable) {
+            SafeRun.w(TAG, t)
+        }
     }
 
     /**
