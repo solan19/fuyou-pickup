@@ -148,7 +148,7 @@ class TrackWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         //   同步之后：打开 App 秒显的就是这一轮的后台数据，"刚打开即最新，不用等刷新"。
         UiCacheSync.syncFromWorker(ctx, freshFiltered, filteredSources)
 
-        // ★ vc289：途中快递小组件吃这份快照 —— 后台每轮抓完顺手推桌面
+        // ★ vc289：在途快递小组件吃这份快照 —— 后台每轮抓完顺手推桌面
         HomeWidgets.updateAll(ctx)
 
         // ★★ vc699：**后台也发布取件码**（小组件 / 流体云 / 新到通知）。
