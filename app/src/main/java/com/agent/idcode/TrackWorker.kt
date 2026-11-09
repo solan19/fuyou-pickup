@@ -67,8 +67,12 @@ class TrackWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         val fresh = fetchResult.items
         // ★ vc553：UI 黑名单（pickup_muted，键 "src:单号"）在后台同样生效 ——
         //   不再对它们发通知、不再写回快照/缓存（京东"已完成却反复回来"的件靠这个挡）。
-        val mutedUi = ctx.getSharedPreferences("idcode", android.content.Context.MODE_PRIVATE)
-            .getStringSet("pickup_muted", null)?.toSet() ?: emptySet()
+        // ★★ v1.3.6：黑名单改读 **MuteStore**（与前台同一份）。
+        //   原来读的是旧键 `idcode/pickup_muted` —— 前台早已不用它（vc670 起统一到 MuteStore），
+        //   于是这里**永远是空集**：后台不知道用户删过哪些件，还把它们当"缺码在途件"补码补回来，
+        //   补回的码带"已领取"轨迹又被自动打上「已取件」灰标 ⇒ 删掉的件过一会儿又回到途中栏
+        //   （同志 2026-11-09 报的那条链，一字不差）。
+        val mutedUi = MuteStore.all(ctx) + MuteStore.hidden(ctx)
         val freshFiltered = fresh.filter { it -> "${it.src}:${it.no}" !in mutedUi }
         if (freshFiltered.size != fresh.size) {
             Log.i(TAG, "黑名单剔除 ${fresh.size - freshFiltered.size} 条（不上报/不通知）")
