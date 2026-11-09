@@ -113,7 +113,13 @@ object PddNative {
         /** ★ vc252：真·运单号（订单列表接口直接给的；空 = 这单还没发货/接口没给） */
         val waybill: String = "",
         /** ★ vc252：「查看物流」直链（相对 URL，形如 goods_express.html?tracking_number=…&order_sn=…） */
-        val expressUrl: String = ""
+        val expressUrl: String = "",
+        /**
+         * ★ vc696：订单列表自带的「预计X送达」提示（`extra_info.order_hint.message` 里的 ETA 段）。
+         * 实测 2026-11-09：11 个在途单**全部**带这条（形如「运输中 预计最晚后天送达 | 中通快递：…」），
+         * 而物流轨迹文本只有部分承运商会写「预计【X月X日】到达」⇒ 只从轨迹抠 ETA 必然缺一大半。
+         */
+        val etaHint: String = ""
     )
 
     /**
@@ -1159,7 +1165,8 @@ object PddNative {
                         TransitItem(
                             orderSn = sn, goods = goodsOf(o), status = status,
                             latest = msg0, phone = "",
-                            waybill = waybillOf(o), expressUrl = expressUrlOf(o)
+                            waybill = waybillOf(o), expressUrl = expressUrlOf(o),
+                            etaHint = etaHintOf(o)
                         )
                     )
                     Log.i("PddNative", "歧义单 $sn：订单=「$status」 物流为空 → 交 cabinet 裁决")
@@ -1234,10 +1241,12 @@ object PddNative {
                     orderSn = sn,
                     goods = goodsOf(o),
                     status = status,
-                    latest = o.optString("shipping_message").ifEmpty { status },
+                    latest = o.optString("shipping_message")
+                        .ifEmpty { orderHintLatestOf(o) }.ifEmpty { status },
                     phone = PddChannel.findPhone(o),
                     waybill = wb,
-                    expressUrl = eu
+                    expressUrl = eu,
+                    etaHint = etaHintOf(o)
                 )
             )
         }
@@ -1263,6 +1272,23 @@ object PddNative {
      * ⇒ 以前「运单号只藏在详情页 DOM 里、每单要开一次页面（10~20s）」这个前提**不成立了**：
      *   批量拿运单号现在**零额外请求**。
      */
+    /**
+     * ★ vc696：订单列表的 ETA 提示 —— 拼多多 App 订单列表每行都写「运输中 预计后天送达 | 中通快递：…」，
+     * 这条就来自 `extra_info.order_hint.message`，**每个在途单都有**。
+     * 返回含「预计」的那一段（没有就空串），交给 UI 层 [MainActivity.etaForCard] 统一解析成「预计明天送达」。
+     */
+    fun etaHintOf(o: JSONObject): String =
+        orderHintMessage(o).split("|").firstOrNull { it.contains("预计") }?.trim().orEmpty()
+
+    /** ★ vc696：order_hint 里「|」后那半段（快递公司：最新物流文案）——
+     *  实测当前订单列表接口**不返回** `shipping_message`（卡面原来只剩一句「待收货」），
+     *  用它当最新轨迹的兜底。 */
+    fun orderHintLatestOf(o: JSONObject): String =
+        orderHintMessage(o).split("|").drop(1).joinToString("|").trim()
+
+    private fun orderHintMessage(o: JSONObject): String =
+        o.optJSONObject("extra_info")?.optJSONObject("order_hint")?.optString("message").orEmpty()
+
     fun waybillOf(o: JSONObject): String {
         val direct = o.optString("tracking_number").trim()
         if (direct.isNotEmpty() && direct != "0" && direct != "null") return direct
