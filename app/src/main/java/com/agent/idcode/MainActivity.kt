@@ -279,7 +279,7 @@ class MainActivity : Activity() {
     /** 还没返回的取件码数据源（加载中文案按它显示"正在获取X取件码"） */
     private val pendingSources = ArrayList<String>()
 
-    // ---------- 途中快递层（第 5 栏） ----------
+    // ---------- 在途快递层（第 5 栏） ----------
 
     private fun openInTransit() {
         if (transitLayer != null) return
@@ -303,7 +303,7 @@ class MainActivity : Activity() {
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ))
 
-        // ★ vc697：平台标签条 —— 途中快递按平台分开加载，左右滑动切换
+        // ★ vc697：平台标签条 —— 在途快递按平台分开加载，左右滑动切换
         val tabScroll = android.widget.HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
         }
@@ -397,7 +397,7 @@ class MainActivity : Activity() {
         transitLayer?.let { root.removeView(it) }
         transitLayer = null
         transitList = null
-        // ★ vc708：离页复位 —— 下次进"途中快递"仍播一次入场动画
+        // ★ vc708：离页复位 —— 下次进"在途快递"仍播一次入场动画
         transitPainted = false
         expandedTransitKey = null
         transitSwipe = null
@@ -509,7 +509,7 @@ class MainActivity : Activity() {
         }.also { mainHandler.postDelayed(it, 50_000) }
 
         // ★ vc212：拼多多改走 PddNative 原生真首页（SSR 首屏旁听 0 次 XHR，老路对最新单
-        //   结构性失明 —— 见 文档\途中快递_第5栏_pdd在途不显示_修复_2026-09-27.md §六）。
+        //   结构性失明 —— 见 文档\在途快递_第5栏_pdd在途不显示_修复_2026-09-27.md §六）。
         //   原生接口层失败才回退 WebView 老路。
         if (wantPdd) fetchPddTransitNative()
         if (wantJd) JdChannel.fetch(this) { _, err ->
@@ -583,7 +583,7 @@ class MainActivity : Activity() {
             }
             // ★ vc345：到站交叉确认 —— 拼多多的订单状态常年停在「待收货」，
             //   一个件其实已到驿站、有取件码，却仍被算成"途中"（同志 2026-10-20 反馈：
-            //   PO-261017-… 明明该进取件码栏，却只在途中快递里）。
+            //   PO-261017-… 明明该进取件码栏，却只在在途快递里）。
             //   `express/cabinet/{order_sn}` 是权威判据：有码 ⇒ 已到站。
             //   每单 10 分钟限频、最多查 8 单、3 线程并行 —— 不给接口添负担。
             val arrived = HashMap<String, Pair<String, String>>()
@@ -1560,7 +1560,7 @@ class MainActivity : Activity() {
 
     /** 把本次**抓到的**在途列表落盘（下一趟进页就能秒显）。只在数据全回来时才调。 */
     /**
-     * vc270c：途中快递缓存改**按源保存**（对齐取件码页口径：对应源抓取失败绝不动它的缓存）。
+     * vc270c：在途快递缓存改**按源保存**（对齐取件码页口径：对应源抓取失败绝不动它的缓存）。
      * 旧版整表覆盖的毛病：一轮刷新里只要有一个源失败/中断，它上一趟的卡就从缓存里消失。
      * 现在每源各存各的（pddTransit/jdTransit/miTransit/tbTransit/manualTransit 字段），
      * 源回调"成功才赋值"⇒ 失败时字段保持旧卡 ⇒ 落盘自然保留。
@@ -1646,7 +1646,7 @@ class MainActivity : Activity() {
                 ).apply()
             }
         } catch (e: Throwable) {
-            Log.w("TransitCache", "存途中快递缓存失败: ${e.message}")
+            Log.w("TransitCache", "存在途快递缓存失败: ${e.message}")
         }
     }
 
@@ -1707,7 +1707,7 @@ class MainActivity : Activity() {
                 }
             }
         } catch (e: Throwable) {
-            Log.w("TransitCache", "读途中快递缓存失败: ${e.message}")
+            Log.w("TransitCache", "读在途快递缓存失败: ${e.message}")
         }
         if (removed.isNotEmpty()) {
             Log.i("TransitTerminal", "读缓存时清除已完成旧卡 ${removed.size} 张：" +
@@ -1937,7 +1937,7 @@ class MainActivity : Activity() {
         val mergedTransit = dedupPkgs(ArrayList<JSONObject>().apply {
             cache?.let { addAll(it) }
             addAll(pddTransit); addAll(jdTransit); addAll(miTransit)
-            // ★ vc302：已到站的淘宝卡不进「途中快递」（改收进第 4 栏取件码）—— 两栏分流
+            // ★ vc302：已到站的淘宝卡不进「在途快递」（改收进第 4 栏取件码）—— 两栏分流
             // ★ vc354：枚举说已取走/已签收的卡也不进（两栏都不显示）
             addAll(tbTransit.filterNot {
                 tbCardArrived(it) || tbEnumVerdict(
@@ -1947,7 +1947,7 @@ class MainActivity : Activity() {
             addAll(manualTransit)
             addAll(testTransit)   // ★ vc264p：测试物流（默认空，生产零影响）
         })
-        // ★★ v1.3.5：**删除取件码后，这件包裹也不该回到「途中快递」**。
+        // ★★ v1.3.5：**删除取件码后，这件包裹也不该回到「在途快递」**。
         //   删除动作 = 清掉码缓存 + 把这件包裹加进 pickup_muted（屏蔽名单）。
         //   但码一没，它就满足途中栏"无码在途件"的收件条件 ⇒ 又被收进来
         //   （同志 2026-11-09 截图：删掉的化妆棉/洗面奶/沐浴露全部回到在途栏）。
@@ -1981,8 +1981,22 @@ class MainActivity : Activity() {
         run {
             val mutedNow = pickupMutedAll()
             if (mutedNow.isNotEmpty()) {
+                // ★★ v1.3.7：**在途优先** —— 用户删掉的是取件码（= 驿站那件不想要了），
+                //   不代表"这件包裹整个消失"：同志实测"皇帝柑"还在运输中，却因为它的取件码被删
+                //   而连途中栏也一起藏了（2026-11-09 报）。
+                //   ⇒ 名单只在**到站态**（有取件码 / 文案说到站待取代收入柜）时生效；
+                //     还在运输中、派送中的件照常显示 —— 它本来就该在这一栏。
+                val arriveHint = listOf("待取", "到站", "已到", "入柜", "代收", "驿站", "快递柜", "自提", "暂存")
                 val before = mergedTransit.size
-                mergedTransit.removeAll { q -> isPickupMuted(q.optString("src"), q, mutedNow) }
+                mergedTransit.removeAll { q ->
+                    val atStation = q.optString("pickupCode").isNotBlank() ||
+                            arriveHint.any {
+                                (q.optString("statusText") + q.optString("latest") + q.optString("tip"))
+                                    .contains(it)
+                            }
+                    if (!atStation) return@removeAll false
+                    isPickupMuted(q.optString("src"), q, mutedNow)
+                }
                 if (before != mergedTransit.size) {
                     Log.i("PickupMuted", "途中栏按屏蔽名单剔除 ${before - mergedTransit.size} 件")
                 }
@@ -2088,12 +2102,12 @@ class MainActivity : Activity() {
         for (pkg in shown) {
             val src = pkg.optString("src")
             // ★★ vc670：**这里以前只算了黑名单却从不判**（muteNo/blacklist 算完就放着），
-            //   所以「途中快递」里长按删除同样删不掉。改为跨来源判：任一身份命中即跳过。
+            //   所以「在途快递」里长按删除同样删不掉。改为跨来源判：任一身份命中即跳过。
             if (isPickupMuted(src, pkg, blacklist)) {
                 Log.i("TransitRender", "按黑名单跳过：$src ${pkg.optString("waybillNo")}")
                 continue
             }
-            // ★ vc553：黑名单（用户删过的单）不再出现在「途中快递」
+            // ★ vc553：黑名单（用户删过的单）不再出现在「在途快递」
             val muteNo = pickKey(src, pkg) ?: pkg.optString("realWaybill").ifEmpty { pkg.optString("waybillNo") }
             // ★★ vc614：**单一裁决器** —— 这个件到底该在取件码栏、途中栏、还是都不显示，
             //   统一由 PickupVerdict 判一次；途中栏只接受 TRANSIT。
@@ -2352,7 +2366,7 @@ class MainActivity : Activity() {
                     .setTitle(if (isManual) "删除这个单号" else "删除并加入黑名单")
                     .setMessage(
                         "$goods\n单号：$no\n\n" +
-                                "删除后不再出现在「途中快递」和「取件码」，\n" +
+                                "删除后不再出现在「在途快递」和「取件码」，\n" +
                                 "以后即使平台又返回这个件也不会显示。\n" +
                                 "可在「设置 → 其他 → 黑名单」里恢复。"
                     )
@@ -2402,7 +2416,7 @@ class MainActivity : Activity() {
 
     /** 预计剩余天数：只从轨迹文本里抠"预计X日/今天/明天"，抠不到就老实显示"在途中"，不编数字 */
     /**
-     * 途中快递层（第 5 栏）。
+     * 在途快递层（第 5 栏）。
      *
      * ★★ 刻意写成「属性 + 自定义 setter」而不是裸字段：
      *    **"有没有层"是"有没有东西可返回"的唯一真相**，而它只由这四个字段的赋值决定。
@@ -2422,7 +2436,7 @@ class MainActivity : Activity() {
     /** ★ vc264m：第 5 栏的下拉刷新控件（null = 页面没开/已关） */
     private var transitSwipe: androidx.swiperefreshlayout.widget.SwipeRefreshLayout? = null
     private var transitStatus: TextView? = null
-    /** ★ vc697：平台标签条（途中快递按平台分开加载、左右滑动切换） */
+    /** ★ vc697：平台标签条（在途快递按平台分开加载、左右滑动切换） */
     private var transitTabRow: LinearLayout? = null
     private var transitTabsScroll: android.widget.HorizontalScrollView? = null
     /** 当前选中的平台："pdd" \/ "jd" \/ "tb" \/ "mi" \/ "manual"（空串 = 还没有可用平台） */
@@ -3468,7 +3482,7 @@ class MainActivity : Activity() {
         //   而 Android 12+ 的 ScrollView 边缘拉伸（overscroll stretch）会在边界处露出底层背景
         //   ⇒ 不刷的话，在深色首页顶部/底部一拉就是一道白边。
         root.setBackgroundColor(cBg)
-        // ★ vc582：测试物流要先加载，首页「途中快递」那行才能显示件数
+        // ★ vc582：测试物流要先加载，首页「在途快递」那行才能显示件数
         //   （原来 loadTestTransit 在 buildHome 之后，首页永远显示 0 件）
         testTransit.clear()
         testTransit.addAll(loadTestTransit())
@@ -4629,7 +4643,7 @@ class MainActivity : Activity() {
                 } catch (t: Throwable) { SafeRun.w("MainActivity", t) }
             }
         }
-        //   --ez debug_open_transit true  进 App 直接开第 5 栏（途中快递）—— adb 测速用，
+        //   --ez debug_open_transit true  进 App 直接开第 5 栏（在途快递）—— adb 测速用，
         //   不用手点底部栏，省得坐标对不准白跑一趟。
         if (intent?.getBooleanExtra("debug_open_transit", false) == true) {
             mainHandler.postDelayed({
@@ -4660,7 +4674,7 @@ class MainActivity : Activity() {
         if (intent?.getBooleanExtra(HomeWidgets.EXTRA_OPEN_PICKUP, false) == true) {
             mainHandler.postDelayed({ openPickup("all") }, 350)
         }
-        // 途中快递小组件点进来：直接进第5栏
+        // 在途快递小组件点进来：直接进第5栏
         if (intent?.getBooleanExtra(HomeWidgets.EXTRA_OPEN_TRANSIT, false) == true) {
             mainHandler.postDelayed({ openInTransit() }, 350)
         }
@@ -4954,7 +4968,7 @@ class MainActivity : Activity() {
 
         box.addView(makeSpacer(UiTok.S12))
 
-        // ---------- 途中快递（独立一行卡） ----------
+        // ---------- 在途快递（独立一行卡） ----------
         val transitCount = pddTransit.size + jdTransit.size + miTransit.size +
                 tbTransit.size + manualTransit.size + testTransit.size
         val transitStatus = if (transitCount > 0) "$transitCount 件在途" else ""
@@ -5090,7 +5104,7 @@ class MainActivity : Activity() {
 
     /**
      * 小米"⋮"弹窗：接入说明 + **数据源开关**（在这里开/关，不用去登录/退出绕一圈）。
-     * 关闭数据源只影响取件码/途中快递是否加载小米，**不动登录态**。
+     * 关闭数据源只影响取件码/在途快递是否加载小米，**不动登录态**。
      */
     private fun openMiMoreDialog() {
         val on = miEnabled()
@@ -5099,7 +5113,7 @@ class MainActivity : Activity() {
             .setMessage(
                 getString(R.string.mi_capability_note) +
                     "\n\n当前状态：" + (if (on) "已启用" else "已关闭") +
-                    "\n（启用后取件码和途中快递才会加载小米数据；小米走网页抓取，加载比其他源慢）"
+                    "\n（启用后取件码和在途快递才会加载小米数据；小米走网页抓取，加载比其他源慢）"
             )
             .setPositiveButton(if (on) "关闭数据源" else "开启数据源") { _, _ ->
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("mi_enabled", !on).apply()
@@ -6363,7 +6377,7 @@ class MainActivity : Activity() {
         if (wantPdd) fetchPddStationDirect()
         // ★ 手动导入的单号**不进第 4 栏**（2026-09-21 同志定的口径：
         //   「第 4 栏的取件码定义就是里面都是取件码」—— 而手动单号是快递100 查轨迹的，
-        //   本身没有取件码）⇒ 它归**第 5 栏（途中快递）**，由 fetchInTransit 那条路去查。
+        //   本身没有取件码）⇒ 它归**第 5 栏（在途快递）**，由 fetchInTransit 那条路去查。
         // ★ vc342（P0-5）：给每个源挂单源硬超时 —— 一个源卡住不再让整栏等到 70s
         for (s in ArrayList(pendingSources)) schedulePickupSettle(s)
         // 排查"明明登录了却判未登录"：把 jar 里淘宝 cookie 实况打到日志
@@ -7248,7 +7262,7 @@ class MainActivity : Activity() {
 
     /** 手动单号走快递100 查轨迹（后台线程），前 5 个；结果进第 4/5 栏 */
     /**
-     * 手动添加的单号 → 快递100 查轨迹（结果只进第 5 栏「途中快递」）。
+     * 手动添加的单号 → 快递100 查轨迹（结果只进第 5 栏「在途快递」）。
      *
      * ★ vc254 提速：原来 5 个单号在 [pddIo]（**单线程**）里一个一个查，而 queryTraceAuto
      *   在公司码识别不出来时会**逐个常见公司码兜底重试**（每试一次一个 HTTP 往返），
@@ -7270,7 +7284,7 @@ class MainActivity : Activity() {
         val todo = items.take(20)
         // ★ 每轮开查前清空，否则并行回来的结果会和上一轮混在一起（越刷越多）
         manualPkgs = ArrayList()
-        // ★★ vc275（10-16，同志报+截图）：「首次加载途中快递中会出现"手动添加的单号"，
+        // ★★ vc275（10-16，同志报+截图）：「首次加载在途快递中会出现"手动添加的单号"，
         //   等加载完毕后它又会消失」—— 根因是**每轮开头无条件清空 manualTransit**：
         //   重查窗口期（快递100 查不到要 8s+，02:23 实测）里任何一次重绘（别的源回来 /
         //   下拉刷新 / 90 秒闸命中）都会让手动卡凭空消失，结果回来又蹦出来 ⇒ 闪 + 丢。
@@ -8242,7 +8256,7 @@ class MainActivity : Activity() {
      *  vc270c：failed=true（用户中断/页面异常）⇒ **保留旧卡**（按源缓存口径），只解除占位。 */
     /**
      * ★ vc302：淘宝在途卡是否「已到站」—— **两栏分流**的唯一判据（同志定的规矩：
-     *   一单快递只出现在两栏其一 —— 在途 → 只在「途中快递」，已到站 → 只在「取件码」）。
+     *   一单快递只出现在两栏其一 —— 在途 → 只在「在途快递」，已到站 → 只在「取件码」）。
      *   tbTransit 这份数据两栏共用，所以第 5 栏渲染时剔掉到站卡、第 4 栏只收到站卡。
      *   词表与 ExpressStore.W_ARRIVED 同语义（驿站/柜/代收点/待取），但不依赖 Item 转换。
      */
@@ -9174,7 +9188,7 @@ class MainActivity : Activity() {
 
     /**
      * ★ vc557：**进页面自动刷新**（设置 → 其他）。
-     * 默认开（保持原来行为）；关掉后进「取件码 / 途中快递」只显示缓存，等用户下拉。
+     * 默认开（保持原来行为）；关掉后进「取件码 / 在途快递」只显示缓存，等用户下拉。
      */
     private fun autoRefreshOnOpen(): Boolean =
         getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean("auto_refresh_on_open", true)
@@ -11345,7 +11359,7 @@ class MainActivity : Activity() {
 
         // 小米：登录后拿到的是 serviceToken（换票在后台自动完成），抓取功能随后接入
         // 行尾"更多"图标：说明接入小米智能助理能拿到哪些快递推送
-        // 小米数据源开关（默认关）：开了才在取件码/途中快递里加载小米，其余源不受影响
+        // 小米数据源开关（默认关）：开了才在取件码/在途快递里加载小米，其余源不受影响
         val miOn = miEnabled()
         val miOk = miOn && MiChannel.isLoggedIn(this)
         // 已登录但还没探到手机号 → 后台问一次小米账号资料（拿包裹要靠手机号，别让用户手输）
@@ -11546,7 +11560,7 @@ class MainActivity : Activity() {
                 infoDialog(
                     "手动添加单号",
                     "不依赖任何平台账号：按运单号走快递100 查询轨迹与预计送达，" +
-                            "在「途中快递」里作为独立标签展示。"
+                            "在「在途快递」里作为独立标签展示。"
                 )
             }
         ) { showAddWaybillDialog() })
@@ -11668,7 +11682,7 @@ class MainActivity : Activity() {
             onMoreClick = {
                 infoDialog(
                     "自动刷新",
-                    "每次打开取件码/途中快递页面时自动抓一次。" +
+                    "每次打开取件码/在途快递页面时自动抓一次。" +
                             "关掉后进页只显示上次结果，需要时下拉手动刷新。"
                 )
             }
@@ -12457,7 +12471,7 @@ class MainActivity : Activity() {
                     .setTitle("全部移除")
                     .setMessage(
                         "把这 ${keys.size} 条从黑名单移除。\n\n" +
-                                "如果平台仍然返回这些件，它们会重新出现在途中快递或取件码里。"
+                                "如果平台仍然返回这些件，它们会重新出现在在途快递或取件码里。"
                     )
                     .setPositiveButton("全部移除") { _, _ ->
                         MuteStore.clear(this)
@@ -12552,7 +12566,7 @@ class MainActivity : Activity() {
             col.addView(linearCard(UiTok.R14).apply {
                 setPadding((16 * dp).toInt(), (14 * dp).toInt(), (16 * dp).toInt(), (14 * dp).toInt())
                 addView(TextView(this@MainActivity).apply {
-                    text = "长按「途中快递」或「取件码」里的卡片 → 删除，就会加到下面这个名单。\n\n" +
+                    text = "长按「在途快递」或「取件码」里的卡片 → 删除，就会加到下面这个名单。\n\n" +
                             "全部删除：永久删除，只能清除 App 数据才能恢复。\n" +
                             "全部移除：正常移除，平台有返回就会重新出现。"
                     textSize = UiTok.T13
@@ -13953,7 +13967,7 @@ class MainActivity : Activity() {
         //   **自营驿站**的件不在那个接口里 ⇒ 已到站（甚至取件码都出来了）却永远不出现，
         //   用户以为件丢了（2026-10-17 极兔 JT3180960043943 实测）。
         //   ★ vc302 分流规矩：到站（待取/入柜/代收点…）→ 只在「取件码」；
-        //     在途/派送中 → 只在「途中快递」（renderInTransit 那侧剔到站卡）。
+        //     在途/派送中 → 只在「在途快递」（renderInTransit 那侧剔到站卡）。
         //   与驿站卡同运单号的会在下面 dedupPkgs 合并（驿站卡有码分高，优先保留）。
         //   无码时 makePackageCard 有兜底显示（状态文案），不会出空行。
         for (t in tbTransit) {
@@ -14121,7 +14135,7 @@ class MainActivity : Activity() {
 
         // ★★ vc710：**还没到驿站、又没有取件码的件，不进「取件码」页**。
         //   同志 2026-11-09 截图实证：一张拼多多「待收货」卡（皇帝柑 · 极兔）被当成取件码卡
-        //   显示在"地址未识别"分组里 —— 它还在路上，属于「途中快递」页。
+        //   显示在"地址未识别"分组里 —— 它还在路上，属于「在途快递」页。
         //   判据（三个都成立才剔）：① 没有取件码 ② 没有任何到站信息（驿站/代收点/柜/货架）
         //   ③ 状态与最新轨迹里也没有"已到/待取/入柜/代收"这类词。
         //   ⚠️ 这样不会误杀"刚到、码还没抓到"的件：那种件一定有到站信息或到站文案。
@@ -14667,7 +14681,7 @@ class MainActivity : Activity() {
             src.addAll(jdPkgs)
             src.addAll(miPkgs)
                 src.addAll(manualPkgs)
-            // ★ 第 5 栏「途中快递」也必须收进来：同志定的通知节点是「派件中 / 已到达」，
+            // ★ 第 5 栏「在途快递」也必须收进来：同志定的通知节点是「派件中 / 已到达」，
             //   而"派件中"发生在在途阶段 —— 只盯第 4 栏（待取）的话，派件中这个节点会整个漏掉。
             //   ★ vc301：**淘宝在途（tbTransit）此前漏收** —— 极兔/圆通自营驿站的件不在
             //     菜鸟驿站接口里，cainiaoPkgs 抓不到它们；后台 Worker 同样抓不到（同因）。
@@ -15682,7 +15696,7 @@ class MainActivity : Activity() {
             appToast(this, "复制失败：${t.message}")
         }
     }
-    // ---------------- ★ vc697：途中快递「按平台分开加载 + 左右滑动切换」 ----------------
+    // ---------------- ★ vc697：在途快递「按平台分开加载 + 左右滑动切换」 ----------------
 
     /** 当前能用的在途平台（有登录态 / 有手动单号才给标签），顺序 = 标签顺序 */
     private fun availableTransitSources(): ArrayList<String> {
@@ -17011,8 +17025,8 @@ class MainActivity : Activity() {
         val names = mapOf(
             HomeWidgets.W_P2 to "2×2 取件码",
             HomeWidgets.W_P4 to "4×2 取件码",
-            HomeWidgets.W_T2 to "2×2 途中快递",
-            HomeWidgets.W_T4 to "4×2 途中快递"
+            HomeWidgets.W_T2 to "2×2 在途快递",
+            HomeWidgets.W_T4 to "4×2 在途快递"
         )
         outer.addView(label("选择小组件"))
         val chipRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -17042,7 +17056,7 @@ class MainActivity : Activity() {
 
         fun rebuildPreview() {
             previewBox.removeAllViews()
-            // 预览统一用途中快递卡的示例数据（文案=同志指定的「快递已到达蜉蝣取件通」）；
+            // 预览统一用在途快递卡的示例数据（文案=同志指定的「快递已到达蜉蝣取件通」）；
             // 选 4×2 的组件就放 4×2 的布局，让形状差异也能看到
             val isBig = sel == HomeWidgets.W_P4 || sel == HomeWidgets.W_T4
             val v = layoutInflater.inflate(
