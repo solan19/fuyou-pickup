@@ -192,18 +192,11 @@ android {
         // ★★ vc690：同志定 —— 对外版本 **1.2**，内部 versionCode **690**（紧接着历史的 682 往上）。
         //   以后每版在 690 基础上 +1；任何 ≤689 的旧包都无法覆盖安装。
         // ★★ vc691/692 → 对外 **1.2.5**，内部 **691**（同志 2026-11-04 14:44 要求提版本）。
-        versionCode = 712
-        versionName = "1.3.3"
+        versionCode = 713
+        versionName = "1.3.4"
     }
 
     buildTypes {
-        // ★★ vc711：debug 版**改包名**，与正式版共存（抖音接口调研用）：
-        //   正式版 com.agent.idcode 日常用；调研版 com.agent.idcode.probe。
-        //   各自独立登录态与缓存，卸载调研版不影响正式版。
-        debug {
-            applicationIdSuffix = ".probe"
-            versionNameSuffix = "-probe"
-        }
         release {
             // ★ vc282：APK 8MB → 唯一大头是 dex 7.18MB（kotlin/coroutines/androidx 全量未裁）。
             //   开 R8 裁剪 + 资源收缩；keep 规则见 proguard-rules.pro
@@ -211,7 +204,12 @@ android {
             //   ★ vc286 A/B 实证：淘宝身份码白屏与 R8 无关（关 R8 依旧白屏，根因在淘宝
             //   服务端风控——菜鸟同 cookie 亮码正常），R8 恢复启用。
             isMinifyEnabled = true
-            isShrinkResources = true
+            // ★★ v1.3.4：**关掉资源收缩**。1.3.3 装上后一启动就崩：
+            //   `Resources$NotFoundException: String resource ID #0x7f0a0015`，
+            //   同时桌面图标退回系统默认图标 —— 都是"资源被裁掉"的典型表现。
+            //   资源收缩只省几十 KB，代价是不可预测的启动失败，不值。
+            //   R8 代码裁剪（isMinifyEnabled）保持不变。
+            isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
