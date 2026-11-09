@@ -86,12 +86,12 @@
     <string name="sf_login_not_yet">还没检测到顺丰登录，请在页面里完成手机号登录</string>
     <!-- 快递100 数据源 -->
     <string name="kd_more_title">快递100 数据源说明</string>
-<string name="kd_capability_note">开启后按运单号查询完整物流轨迹和预计送达时间，补进「途中快递」；没填官方凭据时走免费通道。</string>
+<string name="kd_capability_note">开启后按运单号查询完整物流轨迹和预计送达时间，补进「在途快递」；没填官方凭据时走免费通道。</string>
 <string name="kd_capability_warn">⚠️ 不保证一定补到：刚发出、还没被快递公司收录的单号可能暂时查不到，也受快递100 的数据与免费额度影响（关闭则只显示平台自带的最新一条轨迹）。\n\n★ 拼多多的件走「拼多多自己的数据源」，物流信息一定能补全，不受上面限制。</string>
     <string name="kd_status_on">已启用</string>
     <string name="kd_status_off">已停用</string>
-    <!-- 途中快递层（第 5 栏） -->
-    <string name="bar_transit_title">途中快递</string>
+    <!-- 在途快递层（第 5 栏） -->
+    <string name="bar_transit_title">在途快递</string>
     <string name="bar_transit_sub">汇总各平台在途物流 · 点开看轨迹</string>
     <string name="transit_loading">正在获取在途物流…</string>
     <string name="transit_empty">暂无在途快递 · 下单后会自动出现在这里</string>
@@ -171,9 +171,9 @@
     <string name="widget_p2_desc">最多显示 4 个待取快递的取件码</string>
     <string name="widget_p4_name">取件码 · 4×2</string>
     <string name="widget_p4_desc">最多显示 8 个待取快递的取件码</string>
-    <string name="widget_t2_name">途中快递 · 2×2</string>
+    <string name="widget_t2_name">在途快递 · 2×2</string>
     <string name="widget_t2_desc">显示最新一条物流动态与在途件数</string>
-    <string name="widget_t4_name">途中快递 · 4×2</string>
+    <string name="widget_t4_name">在途快递 · 4×2</string>
     <string name="widget_t4_desc">显示最新两条物流动态与在途件数</string>
     <!-- 鲸鱼娘小组件（vc296） -->
     <string name="whale_w2_name">鲸鱼娘 · 2×2</string>
