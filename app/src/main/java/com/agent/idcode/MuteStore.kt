@@ -27,6 +27,8 @@ object MuteStore {
     private const val KEY_HIDDEN = "hide_keys"
     private const val KEY_OLD_PICKUP = "pickup_muted"
     private const val KEY_OLD_TRACK = "track_muted"
+    /** ★★ v1.3.9：名单硬上限 —— 正常用户远到不了；超了就按插入序淘汰最早的 */
+    private const val MAX_KEYS = 200
 
     private fun sp(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -44,9 +46,9 @@ object MuteStore {
                 val merged = existing.toMutableSet().apply { addAll(legacy) }
                 p.edit().putStringSet(KEY, merged).remove(KEY_OLD_PICKUP).apply()
                 android.util.Log.i("MuteStore", "并入旧 pickup_muted ${legacy.size} 条（vc670 一次性）")
-                return merged
+                return maintain(c, merged)
             }
-            return existing.toMutableSet()
+            return maintain(c, existing.toMutableSet())
         }
         val merged = LinkedHashSet<String>()
         try {
@@ -59,12 +61,46 @@ object MuteStore {
         } catch (t: Throwable) {
             SafeRun.w("MuteStore", t)
         }
-        return merged
+        return maintain(c, merged)
+    }
+
+    /**
+     * ★★ v1.3.9：**名单维护**（读、写前都会跑一次，零额外调用方改动）：
+     *
+     *  ① 归一去重：同一件会同时存在「裸单号/裸码」与「src:单号/code:码」两种写法
+     *     （实测样例：`261105-546192770591958` 与 `pdd:261105-546192770591958` 并存）。
+     *     裸形态本身就是"所有来源都屏蔽"，语义上更强 ⇒ 已有裸形态时，带前缀的那条是冗余，删掉。
+     *  ② 硬上限 200 条：超了按插入顺序淘汰最早的（[save] 用 LinkedHashSet 保序）。
+     *
+     * 这样名单不会无限膨胀，也不会出现同一条被记成 3~4 份。
+     */
+    private fun maintain(c: Context, set: MutableSet<String>): MutableSet<String> {
+        try {
+            val bare = set.filter { ':' !in it }.toSet()
+            if (bare.isNotEmpty()) {
+                val removed = set.removeAll { k ->
+                    val i = k.indexOf(':')
+                    i > 0 && k.substring(i + 1) in bare
+                }
+                if (removed) {
+                    android.util.Log.i("MuteStore", "名单归一：删掉 ${bare.size} 条裸形态的冗余前缀项")
+                }
+            }
+            if (set.size > MAX_KEYS) {
+                val keep = set.toList().takeLast(MAX_KEYS)
+                set.clear()
+                set.addAll(keep)
+                android.util.Log.i("MuteStore", "名单超上限，淘汰到 $MAX_KEYS 条")
+            }
+        } catch (t: Throwable) {
+            SafeRun.w("MuteStore", t)
+        }
+        return set
     }
 
     fun save(c: Context, set: Set<String>) {
         try {
-            sp(c).edit().putStringSet(KEY, LinkedHashSet(set)).apply()
+            sp(c).edit().putStringSet(KEY, maintain(c, LinkedHashSet(set))).apply()
         } catch (t: Throwable) {
             SafeRun.w("MuteStore", t)
         }
