@@ -91,7 +91,7 @@ object PddChannel {
         private set
     private val main = Handler(Looper.getMainLooper())
 
-    /** 最近一次抓取的原始响应（途中快递栏用它做宽口径解析） */
+    /** 最近一次抓取的原始响应（在途快递栏用它做宽口径解析） */
     @Volatile
     var lastCaptures: List<Pair<String, String>> = emptyList()
         private set
@@ -663,7 +663,7 @@ object PddChannel {
     private val PICKUP_CARD_STATES = setOf("IN_CABINET", "SIGN")
 
     /**
-     * 第 5 栏「途中快递」里**不算途中**的 track/status 状态（已取走 + 在驿站待取）——
+     * 第 5 栏「在途快递」里**不算途中**的 track/status 状态（已取走 + 在驿站待取）——
      * 与第 4 栏的 [NON_PICKUP_STATES] **互补**：那边只收"待取"，这边排除"待取+已取走"；
      * `ARRIVAL`（在途）与页面没查过状态的单都进第 5 栏。两个口径别混用。
      */
@@ -905,7 +905,7 @@ object PddChannel {
 
     /** 把原始捕获落盘，便于现场核对字段（受 DEBUG_EXPORT 控制） */
     /**
-     * 第 5 栏「途中快递」的终态/非途中词名单。
+     * 第 5 栏「在途快递」的终态/非途中词名单。
      * ★ vc212 补「补寄成功」：LED 日光灯管那单（260510）状态是"换货/补寄成功"= 终态，
      *   旧名单漏了它 ⇒ 误卡涌进途中栏（09-27 取证 §六）。
      * [parseInTransit] 与 [PddNative.inTransitScan] 共用这一份，防两处名单漂移。
@@ -944,7 +944,7 @@ object PddChannel {
         return TRANSIT_TERMINAL_WORDS.any { status.contains(it) }
     }
 
-    /** 途中快递栏的宽口径：一切**非终态、非"在驿站待取"、非"已取走"**的订单（在途/未知状态）。
+    /** 在途快递栏的宽口径：一切**非终态、非"在驿站待取"、非"已取走"**的订单（在途/未知状态）。
      *  ★★ 09-26 取证：`order_list_v4` 响应的订单数组叫 **`orders`**（不是 order_list）——
      *  旧代码找 `order_list` 永远 null ⇒ **第 5 栏的拼多多在途件从未显示过**（338 条捕获 0 条命中）。
      *  另：捕获 body 里的 `| BODY:` 拼在 URL 字段（WebHook 169 行），body 本身是**纯响应**，
