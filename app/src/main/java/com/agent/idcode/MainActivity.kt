@@ -745,6 +745,7 @@ class MainActivity : Activity() {
                                 //   （有它们就不用开订单详情页去"点进去抠"了，见 enhancePddTransitTraces）
                                 put("realWaybill", t.waybill)
                                 put("expressUrl", t.expressUrl)
+                                put("etaHint", t.etaHint)   // ★ vc696：订单列表自带的预计送达
                             })
                         }
                         Log.i("PddEnum", "本轮 kept=${kept.size}：" + kept.joinToString(",") { it.optString("waybillNo") })
@@ -769,6 +770,7 @@ class MainActivity : Activity() {
                                     put("phone", t.phone)
                                     put("realWaybill", t.waybill)
                                     put("expressUrl", t.expressUrl)
+                                    put("etaHint", t.etaHint)   // ★ vc696
                                 })
                                 continue
                             }
@@ -1125,8 +1127,21 @@ class MainActivity : Activity() {
      * 认这些形态：`预计11月5日` / `预计5日` / `预计5号` / `预计今天|明天|后天` /
      * `预计24小时`；都没有但已在派送 ⇒「今日派送中」。
      */
-    private fun etaForCard(latest: String, traceLines: String, status: String): String {
-        val pool = listOf(latest, status, traceLines).joinToString(" ")
+    private fun etaForCard(
+        latest: String, traceLines: String, status: String, hint: String = ""
+    ): String {
+        // ★ vc696：拼多多订单列表自带的「预计X送达」（每单都有）优先 —— 轨迹文本只有部分承运商写。
+        //   实测形态：预计今天/明天/后天送达、预计最晚后天送达（多一个「最晚」，老正则认不出）。
+        if (hint.isNotEmpty()) {
+            Regex("预计\\s*(?:最晚|最早|大概|可能|约)?\\s*(今天|明天|后天)").find(hint)?.let {
+                return "预计${it.groupValues[1]}送达"
+            }
+            Regex("预计\\s*[【\\[（(]?\\s*(\\d{1,2})\\s*[日号]").find(hint)?.let { m ->
+                val dy = m.groupValues[1].toIntOrNull()
+                if (dy != null) dayText(daysUntil(null, dy))?.let { return it }
+            }
+        }
+        val pool = listOf(latest, status, traceLines, hint).joinToString(" ")
         Regex("预计\\s*[【\\[（(]?\\s*(\\d{1,2})\\s*月\\s*(\\d{1,2})\\s*[日号]").find(pool)?.let { m ->
             val mo = m.groupValues[1].toIntOrNull()
             val dy = m.groupValues[2].toIntOrNull()
@@ -1136,7 +1151,9 @@ class MainActivity : Activity() {
             val dy = m.groupValues[1].toIntOrNull()
             if (dy != null) dayText(daysUntil(null, dy))?.let { return it }
         }
-        Regex("预计\\s*[【\\[（(]?\\s*(今天|明天|后天)").find(pool)?.let { return "预计${it.groupValues[1]}送达" }
+        Regex("预计\\s*(?:最晚|最早|大概|可能|约)?\\s*[【\\[（(]?\\s*(今天|明天|后天)").find(pool)?.let {
+            return "预计${it.groupValues[1]}送达"
+        }
         Regex("预计\\s*(\\d{1,3})\\s*小时").find(pool)?.let { return "预计${it.groupValues[1]}小时内送达" }
         if (status.contains("派送") || status.contains("派件") || status.contains("投递")) return "今日派送中"
         return ""
@@ -2078,7 +2095,7 @@ class MainActivity : Activity() {
                     wbReal.isNotEmpty() -> bits.add(wbReal)
                     wbNo.isNotEmpty() -> bits.add(wbNo)
                 }
-                etaForCard(latest, pkg.optString("traceLines"), status)
+                etaForCard(latest, pkg.optString("traceLines"), status, pkg.optString("etaHint"))
                     .takeIf { it.isNotEmpty() }?.let { bits.add(it) }
                 val waybillForCopy = wbReal.ifEmpty { wbNo }
                 if (bits.isNotEmpty()) {
@@ -2166,7 +2183,7 @@ class MainActivity : Activity() {
             dline("状态", status)
             dline("单号", no)
             dline("快递公司", courierTagOf(pkg).orEmpty())
-            dline("预计到达", etaForCard(latest, pkg.optString("traceLines"), status))
+            dline("预计到达", etaForCard(latest, pkg.optString("traceLines"), status, pkg.optString("etaHint")))
             card.addView(detail)
 
             head.setOnClickListener {
