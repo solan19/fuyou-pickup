@@ -10986,7 +10986,14 @@ class MainActivity : Activity() {
             "淘宝 / 菜鸟",
             if (tbOk) getString(R.string.source_logged_in, TbChannel.uid().takeLast(4))
             else getString(R.string.source_not_logged_in),
-            tbOk
+            tbOk,
+            onMoreClick = {
+                infoDialog(
+                    "淘宝 / 菜鸟",
+                    "登录后从淘宝/菜鸟抓取件码与到站物流。这里的登录态与主页第 1 栏共用，" +
+                            "退出会一并清掉淘宝 cookie。"
+                )
+            }
         ) {
             if (tbOk) confirmLogoutSource("淘宝 / 菜鸟") { clearSourceData("tb"); clearTaobaoCookiesExact() }
             else openTbLogin()
@@ -11014,6 +11021,25 @@ class MainActivity : Activity() {
             textSize = 15f
             setTextColor(cTextPrimary)
         })
+        // ★ vc703：与其它行同款 ⓘ（多账号语义容易误解，值得说明）
+        run {
+            val iv = android.widget.ImageView(this).apply {
+                setImageResource(R.drawable.mi_more)
+                setColorFilter(cTextTertiary)
+                scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+                isClickable = true
+                setOnClickListener {
+                    infoDialog(
+                        "拼多多",
+                        "在应用内登录一次即可抓取拼多多的取件码与在途物流；可添加多个账号，" +
+                                "身份码永远用主号。点本行可展开/收起账号列表。"
+                    )
+                }
+            }
+            pddHeader.addView(iv, LinearLayout.LayoutParams(
+                (16 * dp).toInt(), (24 * dp).toInt()
+            ).apply { leftMargin = (3 * dp).toInt() })
+        }
         pddHeader.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
         pddHeader.addView(TextView(this).apply {
             val base = if (pddOk) getString(R.string.source_logged_in, PddChannel.uid(this@MainActivity))
@@ -11134,7 +11160,14 @@ class MainActivity : Activity() {
             "京东",
             if (jdOk) getString(R.string.source_logged_in, JdChannel.pin(this))
             else getString(R.string.source_not_logged_in),
-            jdOk
+            jdOk,
+            onMoreClick = {
+                infoDialog(
+                    "京东",
+                    "在应用内登录京东后，用隐形网页旁听订单接口拿取件码与在途物流。" +
+                            "京东接口要现算签名，所以这条路比另外两家慢一些。"
+                )
+            }
         ) {
             if (jdOk) confirmLogoutSource("京东") { clearSourceData("jd"); JdChannel.clearLogin(this) }
             else openJdLogin()
@@ -11283,6 +11316,25 @@ class MainActivity : Activity() {
             textSize = 15f
             setTextColor(cTextPrimary)
         })
+        // ★ vc703：与其它行同款 ⓘ（顺带说明"免费通道不保证有数据"）
+        run {
+            val iv = android.widget.ImageView(this).apply {
+                setImageResource(R.drawable.mi_more)
+                setColorFilter(cTextTertiary)
+                scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+                isClickable = true
+                setOnClickListener {
+                    infoDialog(
+                        "快递100",
+                        "不登录任何账号，按运单号补完整轨迹与预计送达。免费通道近年常拿不到数据，" +
+                                "想稳定就点本行填写官方 key（开放平台申请）。"
+                    )
+                }
+            }
+            kdRow.addView(iv, LinearLayout.LayoutParams(
+                (16 * dp).toInt(), (24 * dp).toInt()
+            ).apply { leftMargin = (3 * dp).toInt() })
+        }
         kdRow.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
         // ★ 状态文字单独持引用：开关切换时**原地只改这一行**，不再重建整个设置页 ——
         //   重建等于把整页 layerIn 重播一遍（用户看到"页面闪一下又滑进来"），比不做动效更糟。
@@ -11319,7 +11371,14 @@ class MainActivity : Activity() {
         srcBox.addView(sourceRow(
             "手动添加单号",
             if (manualCount > 0) "已添加 $manualCount 个 · 点击添加/管理" else "点击添加运单号",
-            true
+            true,
+            onMoreClick = {
+                infoDialog(
+                    "手动添加单号",
+                    "不依赖任何平台账号：按运单号走快递100 查询轨迹与预计送达，" +
+                            "在「途中快递」里作为独立标签展示。"
+                )
+            }
         ) { showAddWaybillDialog() })
 
         // ---- 身份码（vc536）：淘宝身份码跳转 + 菜鸟身份码替换 ----
@@ -11336,7 +11395,14 @@ class MainActivity : Activity() {
         // ① 淘宝身份码跳转（原在「快递数据源」里，vc536 挪到这里）
         card.addView(switchRow(
             "淘宝身份码跳转",
-            prefs.getBoolean("tb_id_autojump", false)
+            prefs.getBoolean("tb_id_autojump", false),
+            onMoreClick = {
+                infoDialog(
+                    "淘宝身份码跳转",
+                    "打开身份码时会自动跳到淘宝/菜鸟的取件码页面，省一次手动点击。" +
+                            "不想要自动跳转时关掉即可。"
+                )
+            }
         ) { on, _ ->
             prefs.edit().putBoolean("tb_id_autojump", on).apply()
             Log.i("Settings", "淘宝身份码跳转 = $on")
@@ -11344,7 +11410,14 @@ class MainActivity : Activity() {
         // ② 菜鸟身份码替换（新）：开启后页面没出码时，用备用码**替换**页面那块区域（不弹窗）
         card.addView(switchRow(
             "菜鸟备用身份码",
-            prefs.getBoolean("id_backup_code", false)
+            prefs.getBoolean("id_backup_code", false),
+            onMoreClick = {
+                infoDialog(
+                    "菜鸟备用身份码",
+                    "页面自己没出码时，用本地保存的备用码替换那块区域（不弹窗）。" +
+                            "仅在官方接口抽风时用得上。"
+                )
+            }
         ) { on, _ ->
             prefs.edit().putBoolean("id_backup_code", on).apply()
             Log.i("Settings", "菜鸟备用身份码 = $on")
@@ -11370,7 +11443,14 @@ class MainActivity : Activity() {
             textSize = 13f
             setTextColor(cTextSecondary)   // ★ vc515：与「导出日志 设置」同色同字号
         }
-        card.addView(trackRow("跟踪范围", modeStatus) { showTrackModeSheet() })
+        card.addView(trackRow("跟踪范围", modeStatus,
+            onMoreClick = {
+                infoDialog(
+                    "跟踪范围",
+                    "「全部」= 盯所有在途包裹（手动屏蔽的除外）；「指定」= 只盯你长按标记过的那几单。" +
+                            "只有「派件中」和「已到达」两种情况会通知。"
+                )
+            }) { showTrackModeSheet() })
         val pollMin = ExpressStore.pollIntervalMin(this)
             val pm = maxOf(pollMin, ExpressStore.MIN_INTERVAL_MIN)
             val all = ExpressStore.trackMode(this) == ExpressStore.MODE_ALL
@@ -11399,7 +11479,14 @@ class MainActivity : Activity() {
             }
         ) { showPollIntervalSheet(pollStatus) })
         // ★ vc357：自动打已取标签 —— 枚举判"已取走"时给取件码卡打灰标（24h 自动消失）
-        card.addView(switchRow("自动打已取标签", autoPickedTagOn()) { on, _ ->
+        card.addView(switchRow("自动打已取标签", autoPickedTagOn(),
+            onMoreClick = {
+                infoDialog(
+                    "自动打已取标签",
+                    "取件码被别人取走时，用拼多多自己的状态枚举把这张卡打上「已取件」灰标，" +
+                            "24 小时后自动消失。开关关掉则保持原样，需要你自己删。"
+                )
+            }) { on, _ ->
             getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                 .putBoolean("auto_picked_tag", on).apply()
             Log.i("Settings", "自动打已取标签 = $on")
@@ -11407,7 +11494,14 @@ class MainActivity : Activity() {
         // ★ vc599：同志要求 —— 「自动刷新」从「其他」搬到「提醒与跟踪」（它属于刷新/抓取行为）
         card.addView(switchRow(
             "自动刷新",
-            prefs.getBoolean("auto_refresh_on_open", true)
+            prefs.getBoolean("auto_refresh_on_open", true),
+            onMoreClick = {
+                infoDialog(
+                    "自动刷新",
+                    "每次打开取件码/途中快递页面时自动抓一次。" +
+                            "关掉后进页只显示上次结果，需要时下拉手动刷新。"
+                )
+            }
         ) { on, _ ->
             prefs.edit().putBoolean("auto_refresh_on_open", on).apply()
             Log.i("Settings", "自动刷新 = $on")
@@ -11462,14 +11556,27 @@ class MainActivity : Activity() {
         //      ⇒ 关掉只是"不上报 + 撤下已发的"，**不碰系统权限、也绝不跳系统设置**。
         //      系统「提升型通知」权限归用户自己在系统设置里管，本开关不碰它。
         //   ★ 行内只留名称 + 开关（同志要求删掉右侧状态提示）。
-        card.addView(switchRow("流体云", LiveUpdate.isEnabled(this)) { checked, _ ->
+        card.addView(switchRow("流体云", LiveUpdate.isEnabled(this),
+            onMoreClick = {
+                infoDialog(
+                    "流体云",
+                    "把未取件的取件码挂到系统「流体云 / 实况位」上，聚类成一条通知。" +
+                            "需要系统设置里也允许本应用的「提升型通知」，否则只会是一条普通常驻通知。"
+                )
+            }) { checked, _ ->
             LiveUpdate.setEnabled(this, checked)      // 立刻生效（开=补推，关=全撤）
         })
 
         // ② 侧滑跟手动画（预测性返回）
         //   ★ 关掉之后：侧滑返回**不会**带着页面走，但手势本身照常可用（照样能返回）。
         //   ★ 同样只留名称 + 开关
-        card.addView(switchRow("侧滑跟手动画", prefs.getBoolean(KEY_PREDICTIVE, true)) { checked, _ ->
+        card.addView(switchRow("侧滑跟手动画", prefs.getBoolean(KEY_PREDICTIVE, true),
+            onMoreClick = {
+                infoDialog(
+                    "侧滑跟手动画",
+                    "侧滑返回时页面跟着手指走（系统预测性返回）。关掉则用系统默认的返回动画。"
+                )
+            }) { checked, _ ->
             prefs.edit().putBoolean(KEY_PREDICTIVE, checked).apply()
         })
 
@@ -11483,7 +11590,14 @@ class MainActivity : Activity() {
         //     ⇒ 开岛即自动开绕过、关岛即自动关绕过，不再单独设开关。
         //     绕过引擎实际是**双引擎**（IslandBypass.engine(): Shizuku 优先、Stellar 自动兜底，
         //     binder 直调与 cmd 兜底两条路都有 Stellar 分支）——旧行名只写 Shizuku 是历史误导。
-        card.addView(switchRow("超级岛（实验版）", IslandHelper.isEnabled(this)) { checked, sw ->
+        card.addView(switchRow("超级岛（实验版）", IslandHelper.isEnabled(this),
+            onMoreClick = {
+                infoDialog(
+                    "超级岛（实验版）",
+                    "把取件码送到 HyperOS 超级岛（焦点通知）。实验功能：只在支持的机型上出现，" +
+                            "其它设备开关打开也不会有东西。"
+                )
+            }) { checked, sw ->
             if (checked) {
                 val engineOn = ShizukuBridge.isEnabled(this) || StellarBridge.isEnabled(this)
                 Log.i("Island", "主开关闸门（设置口径）: shizuku开关=${ShizukuBridge.isEnabled(this)} " +
@@ -11528,7 +11642,14 @@ class MainActivity : Activity() {
 
         // ③ Shizuku（同志 10-15 改成：左名称 + 右开关，**打开时校验权限**）
         //   有权限 ⇒ 正常开启并连上保护进程；没权限 ⇒ **开不了**（开关弹回 + 提示原因）。
-        card.addView(switchRow("Shizuku", ShizukuBridge.isEnabled(this)) { checked, sw ->
+        card.addView(switchRow("Shizuku", ShizukuBridge.isEnabled(this),
+            onMoreClick = {
+                infoDialog(
+                    "Shizuku",
+                    "借 Shizuku 的权限做两件增强：身份码页自动点按、免 root 读系统待办。" +
+                            "没装 Shizuku 时全部逻辑静默降级，不影响任何基本功能。"
+                )
+            }) { checked, sw ->
             if (checked) {
                 if (ShizukuBridge.isAvailable()) {
                     ShizukuBridge.setEnabled(this, true)
@@ -11580,7 +11701,13 @@ class MainActivity : Activity() {
 
         // ④ Stellar（同志 10-15 要求，与 Shizuku 并存；样式与上面完全一致）
         //   同志手机上只装了 Stellar（没装原版 Shizuku）⇒ 这个开关才是实际能用的那个。
-        card.addView(switchRow("Stellar", StellarBridge.isEnabled(this)) { checked, sw ->
+        card.addView(switchRow("Stellar", StellarBridge.isEnabled(this),
+            onMoreClick = {
+                infoDialog(
+                    "Stellar",
+                    "Shizuku 的深度定制分支，机制同源。装了哪个用哪个；两个都没装则全部静默降级。"
+                )
+            }) { checked, sw ->
             if (checked) {
                 if (StellarBridge.isAvailable()) {
                     StellarBridge.setEnabled(this, true)
@@ -11629,7 +11756,13 @@ class MainActivity : Activity() {
         //   打开 = 卡片从最近任务消失（想切回 App 请从桌面图标进）；关闭 = 立刻恢复显示。
         //   ★ 不用 Manifest 的 android:excludeFromRecents —— 那是永久性的、装完定死，
         //     做不成"想开就开、想关就关"的开关。
-        card.addView(switchRow("隐藏最近任务卡片", prefs.getBoolean("hide_recents", false)) { checked, _ ->
+        card.addView(switchRow("隐藏最近任务卡片", prefs.getBoolean("hide_recents", false),
+            onMoreClick = {
+                infoDialog(
+                    "隐藏最近任务卡片",
+                    "让本应用不出现在系统「最近任务」里，避免被一键清理顺手划掉（后台保活的一环）。"
+                )
+            }) { checked, _ ->
             prefs.edit().putBoolean("hide_recents", checked).apply()
             applyHideRecents(checked)
             appToast(
@@ -14630,6 +14763,8 @@ class MainActivity : Activity() {
     private fun switchRow(
         name: String,
         checked: Boolean,
+        // ★ vc703：与 sourceRow / trackRow 同一套 —— 有说明的行都在名称右侧挂一个同款 ⓘ
+        onMoreClick: (() -> Unit)? = null,
         onToggle: (Boolean, android.widget.Switch) -> Unit
     ): View {
         val row = LinearLayout(this).apply {
@@ -14651,6 +14786,19 @@ class MainActivity : Activity() {
             textSize = UiTok.T15
             setTextColor(cTextPrimary)
         })
+        // ★ vc703：说明图标（与 sourceRow 同款、同尺寸、同位置规则）
+        if (onMoreClick != null) {
+            val iv = android.widget.ImageView(this).apply {
+                setImageResource(R.drawable.mi_more)
+                setColorFilter(cTextTertiary)
+                scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+                isClickable = true
+                setOnClickListener { onMoreClick() }
+            }
+            row.addView(iv, LinearLayout.LayoutParams(
+                (16 * dp).toInt(), (24 * dp).toInt()
+            ).apply { leftMargin = (3 * dp).toInt() })
+        }
         // 弹性空隙：把开关推到行尾
         row.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
         row.addView(android.widget.Switch(this).apply {
@@ -15597,6 +15745,22 @@ class MainActivity : Activity() {
             return if (tag.length in 2..4) tag else hit
         }
         return s.take(6)
+    }
+
+    /**
+     * ★ vc703：设置页统一的「这一行是干什么的」说明弹窗 ——
+     *   与 sourceRow / trackRow / switchRow 的 ⓘ 同一个出口，样式（showAnimated）也一致。
+     */
+    private fun infoDialog(title: String, msg: String) {
+        try {
+            AlertDialog.Builder(this)
+                .setTitle(title)
+                .setMessage(msg)
+                .setPositiveButton("好", null)
+                .showAnimated()
+        } catch (t: Throwable) {
+            SafeRun.w("Settings", t)
+        }
     }
 
     private fun chip(text: String, colorHex: String): TextView = TextView(this).apply {
