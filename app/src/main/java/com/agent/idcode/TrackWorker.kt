@@ -86,6 +86,13 @@ class TrackWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
             // 可信源的成功空结果可清除其旧途中卡；失败、未登录或未运行的源保持旧缓存。
             UiCacheSync.syncFromWorker(ctx, emptyList(), filteredSources)
             HomeWidgets.updateAll(ctx)
+            // ★ vc699：本轮没抓到东西也发布一次 —— 只读缓存、零网络开销，
+            //   保证"上轮抓到但没推出去的码"不会一直卡在缓存里。
+            try {
+                PickupPublish.publish(ctx, notifyNew = true)
+            } catch (t: Throwable) {
+                Log.w(TAG, "后台发布取件码失败: ${t.message}")
+            }
             return Result.success()
         }
 
@@ -139,6 +146,16 @@ class TrackWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
 
         // ★ vc289：途中快递小组件吃这份快照 —— 后台每轮抓完顺手推桌面
         HomeWidgets.updateAll(ctx)
+
+        // ★★ vc699：**后台也发布取件码**（小组件 / 流体云 / 新到通知）。
+        //   这一步原来只在 MainActivity 里（publishWidgetCodes，第 4 栏渲染时才调）⇒
+        //   后台每轮确实抓了码、也写进了 PddCodeStore，却没人推给小组件/流体云：
+        //   用户看到的就是"有快递到了，小组件不更新、也不推通知，只有点开软件才更新取件码"。
+        try {
+            PickupPublish.publish(ctx, notifyNew = true)
+        } catch (t: Throwable) {
+            Log.w(TAG, "后台发布取件码失败: ${t.message}")
+        }
 
         // ★ vc358：后台轮询也给「取件码卡」做已取判定 ——
         //   以前轮询只盯在途件，取件码卡要等用户打开 App 才刷新。
