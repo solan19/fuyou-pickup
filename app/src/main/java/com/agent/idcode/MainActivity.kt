@@ -15517,6 +15517,11 @@ class MainActivity : Activity() {
         "红薯", "土豆", "山药", "南瓜", "番茄", "黄瓜", "白菜", "生菜", "菠菜", "萝卜", "茄子", "辣椒",
         "大蒜", "生姜", "蘑菇", "木耳", "海带", "大米", "面粉", "面条", "食用油", "酱油", "食盐",
         "牛奶", "奶茶", "咖啡", "茶叶", "饮料", "白酒", "啤酒", "坚果", "瓜子", "花生", "饼干", "面包",
+        "化妆棉", "湿敷棉", "棉柔巾", "洗面奶", "洁面", "润唇膏", "卸妆油", "口红", "羊羔绒",
+        "置物架", "收纳架", "收纳袋", "垃圾桶", "保鲜袋", "保鲜膜", "密封罐", "拖把", "扫把", "抹布",
+        "抱枕", "枕套", "被套", "床单", "蚊帐", "凉席", "雨伞", "双肩包", "背包", "手提包", "钱包",
+        "腰带", "皮带", "眼镜", "太阳镜", "发夹", "发绳", "梳子", "暖宝宝", "插排", "垃圾袋",
+        "棉裤", "棉鞋", "棉拖", "棉袜", "棉被", "棉帽", "帽子", "袜子", "裤子",
         "鸡蛋", "鸡胸肉", "牛肉", "羊肉", "猪肉", "虾仁", "鱼", "虾", "蟹",
         "柑", "橘", "橙", "柚", "桃", "柿", "枣", "莓", "梨", "鞋", "靴", "袜", "帽",
         "衣", "服", "裤", "裙", "巾", "纸", "锅", "碗", "刀", "剪", "杯", "壶", "笔", "灯", "膜", "液", "霜", "皂"
@@ -15556,14 +15561,28 @@ class MainActivity : Activity() {
         s = s.replace(Regex("\\s+"), "")
         if (s.isEmpty()) return raw.take(6)
         if (s.length <= 3) return s
-        val cate = GOODS_CATE.firstOrNull { s.contains(it) }
-        if (cate != null) {
-            val idx = s.indexOf(cate)
-            var head = s.substring(0, idx)
+        // 命中品类词：**位置最靠前的优先**（同位置取更长的那个）。
+        //   例：「广西皇帝柑新鲜水果薄皮无渣橘子」里"柑"(第4位) 与"橘子"(第10位) 都在表里，
+        //   要的是"皇帝柑"而不是"橘子" —— 先出现的就是这件东西本身。
+        var cate: String? = null
+        var cateIdx = Int.MAX_VALUE
+        for (c in GOODS_CATE) {
+            val i = s.indexOf(c)
+            if (i < 0) continue
+            if (i < cateIdx || (i == cateIdx && c.length > (cate?.length ?: 0))) {
+                cate = c
+                cateIdx = i
+            }
+        }
+        val hit = cate
+        if (hit != null) {
+            // 双字以上品类词本身就是完整名字（棉服 / 柿子 / 运动鞋 / 手机壳…）
+            if (hit.length >= 2) return hit
+            // 单字品类词（柑 / 柿 / 鞋 / 帽…）要带上前面的限定字："皇帝柑"而不是"柑"
+            var head = s.substring(0, cateIdx)
             while (head.isNotEmpty() && head.last() in GOODS_MOD) head = head.dropLast(1)
-            val bonus = if (head.isEmpty()) "" else head.takeLast(2)
-            val tag = bonus + cate
-            return if (tag.length in 2..6) tag else cate
+            val tag = (if (head.isEmpty()) "" else head.takeLast(2)) + hit
+            return if (tag.length in 2..4) tag else hit
         }
         return s.take(6)
     }
