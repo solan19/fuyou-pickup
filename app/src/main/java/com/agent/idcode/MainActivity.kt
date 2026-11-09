@@ -2073,16 +2073,23 @@ class MainActivity : Activity() {
                 gravity = Gravity.CENTER_VERTICAL
             }
             topRow.addView(chip(srcName(src), srcColor(src)))
-            // 商品名直接放进第一行（吃掉标签之外的剩余宽度）
+            // ★ vc699：商品长标题 → **小标签**（"皇帝柑" / "棉衣" / "鞋" / "柿子"…）。
+            //   同志要求：卡上别再出现「【活动特价】加大加厚家用手提黑色」这种一长串描述标题。
             topRow.addView(TextView(this).apply {
-                text = goods
-                textSize = UiTok.T15
-                setTextColor(cTextPrimary)
+                text = goodsTag(goods)
+                textSize = UiTok.T13
+                typeface = tfMedium
+                setTextColor(cTextSecondary)
+                gravity = Gravity.CENTER
+                background = tagBg()
+                setPadding((8 * dp).toInt(), (3 * dp).toInt(), (8 * dp).toInt(), (3 * dp).toInt())
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }, LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { leftMargin = (6 * dp).toInt() })
+            // 右侧弹性占位：标签靠左，不被拉伸成整行
+            topRow.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
             head.addView(topRow, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ))
@@ -14255,6 +14262,9 @@ class MainActivity : Activity() {
             .putString(HomeWidgets.KEY_WIDGET_CODES, codes.toString())
             .apply()
         HomeWidgets.updateAll(this)
+        // ★ vc699："已给用户看过"的账本由公共出口维护 —— 不记账的话，
+        //   用户刚在 App 里看到的码，下一轮后台还会当成"新到"再推一条通知。
+        try { PickupPublish.markSeen(this) } catch (t: Throwable) { SafeRun.w("PickupPublish", t) }
     }
 
     /**
@@ -14995,7 +15005,8 @@ class MainActivity : Activity() {
         ).apply { topMargin = (10 * dp).toInt() })
 
         // 明细：商品 · 状态
-        val detail = listOf(goods, status).filter { it.isNotEmpty() }.joinToString(" · ")
+        // ★ vc699：商品长标题 → 小标签
+        val detail = listOf(goodsTag(goods), status).filter { it.isNotEmpty() }.joinToString(" · ")
         if (detail.isNotEmpty()) {
             box.addView(TextView(this).apply {
                 text = detail
@@ -15476,6 +15487,87 @@ class MainActivity : Activity() {
         return "$a · $b · $c"
     }
 
+    // ---------------- ★ vc699：商品名 → 小标签 ----------------
+
+    /** 商品标题里的促销/修饰噪音词（去掉后剩下的才是"这是个什么东西"） */
+    private val GOODS_NOISE = listOf(
+        "包邮", "特价", "活动", "促销", "正品", "官方", "旗舰", "新款", "当季", "新鲜", "现摘", "现挖",
+        "加厚", "加大", "加宽", "宽松", "加绒", "超薄", "超厚", "家用", "商用", "多功能", "通用", "适用",
+        "同款", "网红", "爆款", "限时", "秒杀", "清仓", "批发", "零售", "男士", "女士", "男生", "女生",
+        "冬季", "夏季", "春秋", "秋季", "春季", "四季", "大码", "小码", "中码", "纯棉", "舒适", "亲肤",
+        "透气", "高级感", "创意", "进口", "国产", "精选", "优选", "严选", "专用", "特级", "微瑕"
+    )
+
+    /** 规格/型号：数字 + 单位（"5斤装" "500ml" "10个" …） */
+    private val GOODS_UNIT = Regex(
+        "\\d+(\\.\\d+)?\\s*(g|kg|ml|l|G|KG|ML|L|斤|两|克|千克|毫升|升|个|件|双|只|条|片|瓶|盒|袋|包|箱|套|枚|支|卷|张|米|cm|CM|mm|寸|码|号|pcs|PCS|装|片装|斤装|套装)"
+    )
+
+    /** 品类词（命中最长的那个 —— 决定"这是个什么东西"） */
+    private val GOODS_CATE = listOf(
+        "运动鞋", "拖鞋", "凉鞋", "雨鞋", "布鞋", "皮靴", "棉服", "羽绒服", "外套", "大衣", "卫衣", "毛衣",
+        "衬衫", "T恤", "背心", "内衣", "内裤", "睡衣", "袜子", "帽子", "围巾", "手套", "裤子", "牛仔裤",
+        "裙子", "连衣裙", "手机壳", "充电宝", "数据线", "耳机", "键盘", "鼠标", "电池", "插座", "灯泡",
+        "抽纸", "卷纸", "湿巾", "洗脸巾", "垃圾袋", "洗衣液", "洗洁精", "洗手液", "沐浴露", "洗发水",
+        "牙膏", "牙刷", "口罩", "收纳", "保温杯", "水杯", "勺子", "筷子", "盘子", "饭盒", "炒锅", "汤锅",
+        "电饭煲", "微波炉", "空气炸锅", "破壁机", "电磁炉", "菜刀", "剪刀", "砧板", "面膜", "眼霜",
+        "面霜", "精华", "口红", "粉底", "防晒", "香水", "护手霜", "记号笔", "笔记本", "橡皮", "胶带",
+        "柿子", "桔子", "橙子", "柚子", "桃子", "梨子", "李子", "枣子", "栗子", "橘子", "苹果", "香蕉",
+        "葡萄", "芒果", "菠萝", "西瓜", "柠檬", "草莓", "蓝莓", "樱桃", "猕猴桃", "火龙果", "玉米",
+        "红薯", "土豆", "山药", "南瓜", "番茄", "黄瓜", "白菜", "生菜", "菠菜", "萝卜", "茄子", "辣椒",
+        "大蒜", "生姜", "蘑菇", "木耳", "海带", "大米", "面粉", "面条", "食用油", "酱油", "食盐",
+        "牛奶", "奶茶", "咖啡", "茶叶", "饮料", "白酒", "啤酒", "坚果", "瓜子", "花生", "饼干", "面包",
+        "鸡蛋", "鸡胸肉", "牛肉", "羊肉", "猪肉", "虾仁", "鱼", "虾", "蟹",
+        "柑", "橘", "橙", "柚", "桃", "柿", "枣", "莓", "梨", "鞋", "靴", "袜", "帽",
+        "衣", "服", "裤", "裙", "巾", "纸", "锅", "碗", "刀", "剪", "杯", "壶", "笔", "灯", "膜", "液", "霜", "皂"
+    ).sortedByDescending { it.length }
+
+    /** 修饰字：紧贴在品类词前面时不算名字的一部分（"丰脆柿子" → "柿子"） */
+    private val GOODS_MOD = "脆甜新鲜大小好优纯正特超薄厚宽高多全老香美嫩软硬干湿精品级版款型号装盒袋".toSet()
+
+    /** 小标签的胶囊底色 */
+    private fun tagBg(): GradientDrawable = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = UiTok.R999 * dp
+        setColor(if (isDark()) Color.parseColor("#2A2B2F") else Color.parseColor("#F1F2F6"))
+    }
+
+    /**
+     * ★ vc699：把商品长标题压成 2~6 字的**小标签**。
+     *
+     *   【彩箱】广西皇帝柑新鲜当季水果薄      → 皇帝柑
+     *   VANCAMEL/西域骆驼座山雕猫耳棉服男款   → 猫耳棉服
+     *   阳丰脆柿子5斤装                      → 柿子
+     *   男款冬季加绒运动鞋                    → 运动鞋
+     * 认不出来就退回"去噪后的前 6 字"；App 自己造的兜底名（"拼多多包裹·xxxxxx"）原样返回。
+     */
+    private fun goodsTag(rawIn: String): String {
+        val raw = rawIn.trim()
+        if (raw.isEmpty()) return ""
+        if (raw.startsWith("拼多多包裹") || raw == "淘宝包裹" || raw == "快递包裹" ||
+            raw == "通知里的取件码" || raw == "手动添加的单号"
+        ) return raw
+        var s = raw
+        s = s.replace(Regex("[【\\[（(][^】\\]）)]*[】\\]）)]"), " ")
+        s = s.replace(GOODS_UNIT, " ")
+        for (w in GOODS_NOISE) s = s.replace(w, " ")
+        s = s.replace(Regex("[A-Za-z0-9%×*+#/—…、,，.。·:：!！?？]"), " ")
+        s = s.replace("-", " ").replace("|", " ")
+        s = s.replace(Regex("\\s+"), "")
+        if (s.isEmpty()) return raw.take(6)
+        if (s.length <= 3) return s
+        val cate = GOODS_CATE.firstOrNull { s.contains(it) }
+        if (cate != null) {
+            val idx = s.indexOf(cate)
+            var head = s.substring(0, idx)
+            while (head.isNotEmpty() && head.last() in GOODS_MOD) head = head.dropLast(1)
+            val bonus = if (head.isEmpty()) "" else head.takeLast(2)
+            val tag = bonus + cate
+            return if (tag.length in 2..6) tag else cate
+        }
+        return s.take(6)
+    }
+
     private fun chip(text: String, colorHex: String): TextView = TextView(this).apply {
         val brand = Color.parseColor(colorHex)
         this.text = text
@@ -15651,7 +15743,7 @@ class MainActivity : Activity() {
             }.let { if (isNonPlaceStationLabel(it)) "" else it }
             listOf(
                 // ★ vc683：公司名已经做成头部 chip，明细行不再重复（原来会「极兔 · 极兔速递」）
-                pkg.optString("goodsName"),
+                goodsTag(pkg.optString("goodsName")),   // ★ vc699：商品长标题 → 小标签
                 addr.ifEmpty { pkg.optString("statusText") }, orderDate
             ).filter { it.isNotEmpty() }.joinToString(" · ")
         } else {
