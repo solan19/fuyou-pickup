@@ -105,6 +105,37 @@ object UiCacheSync {
         else -> null
     }
 
+    /**
+     * ★ vc701：**只能在 UI 侧产生的富字段** —— 后台快照（[ExpressStore.Item]）里根本没有它们：
+     *  商品名、真运单号、物流页直链、订单列表自带的 ETA 提示、完整轨迹、收件人手机号。
+     *  后台同步整格替换时如果不继承，每跑一轮后台，卡上的商品标签 / 运单号 / 预计到达就全没了
+     *  （2026-11-09 实测：12:42 后台一轮之后，transit_cache 里 realWaybill / expressUrl / goodsName 全空）。
+     */
+    private val RICH_FIELDS = listOf(
+        "goodsName", "realWaybill", "expressUrl", "etaHint", "traceLines", "phone"
+    )
+
+    /** 按单号找到旧卡，把新卡缺的富字段继承过来（新卡没有 = 空串；旧卡有就留） */
+    private fun richMerge(oldArr: org.json.JSONArray?, fresh: JSONObject): JSONObject {
+        val key = fresh.optString("waybillNo").ifEmpty { fresh.optString("orderSn") }
+        if (oldArr == null || key.isEmpty()) return fresh
+        var old: JSONObject? = null
+        for (i in 0 until oldArr.length()) {
+            val o = oldArr.optJSONObject(i) ?: continue
+            if (o.optString("waybillNo").ifEmpty { o.optString("orderSn") } == key) {
+                old = o
+                break
+            }
+        }
+        val prev = old ?: return fresh
+        for (f in RICH_FIELDS) {
+            if (fresh.optString(f).isBlank() && prev.optString(f).isNotBlank()) {
+                fresh.put(f, prev.optString(f))
+            }
+        }
+        return fresh
+    }
+
     /** 快照条目 → 第 5 栏卡片。字段名与 renderInTransit 的消费口径一致 */
     private fun cardOf(it: ExpressStore.Item): JSONObject = JSONObject().apply {
         put("src", if (it.src == "cainiao") "tb" else it.src)
@@ -169,8 +200,10 @@ object UiCacheSync {
                 } else {
                     // 平台源整格替换（该源有返回才动，与 UI"成功才赋值"同口径）；
                     // 过滤后为空 = 服务端确实没有在途件 ⇒ 清空这格（旧卡不赖着）
+                    val oldArr = src.optJSONArray(key)
                     val arr = JSONArray()
-                    for (r in keep) arr.put(cardOf(r))
+                    // ★ vc701：继承旧卡的富字段（商品名 / 真运单号 / 直链 / ETA / 轨迹）
+                    for (r in keep) arr.put(richMerge(oldArr, cardOf(r)))
                     src.put(key, arr)
                 }
                 summary.add("$key=${keep.size}/${items.size}")
