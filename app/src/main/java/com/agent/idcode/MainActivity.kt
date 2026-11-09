@@ -15426,13 +15426,66 @@ class MainActivity : Activity() {
      *   ② 先写身份标记 [PickedStore]，再刷缓存条目 —— 否则取消标记会被 all() 又补回来；
      *   ③ 取消时必须走 putForce 强制清 0，不能被「保留旧标记」的兜底逻辑吃掉。
      */
+    /**
+     * ★★ v1.3.3：解析「这张卡在取件码缓存里对应哪一条」，并**保证一定有落点**。
+     *
+     * 原来标记逻辑自己拼键（`waybillNo` 优先），而缓存键对拼多多是**订单号**
+     * （见 [pickKey]：pdd → orderSn 优先）⇒ 拼出来对不上，就弹
+     * 「这单没有取件码缓存，没法标记」（同志 2026-11-09 截图报的现象，偶发即由此而来）。
+     *
+     * 现在：
+     *   ① 先按卡片身份找（pickKey 的规范键 → 用 [parcelIds] 的全部身份在缓存里扫一遍）；
+     *   ② 找不到、但卡片**有取件码** ⇒ 按卡片现成字段 upsert 一条（日志留痕），标记照常生效；
+     *   ③ 连码都没有 ⇒ 返回 null（这种卡本来就不该有「已取件」这个动作）。
+     */
+    private fun resolvePickupKeyForCard(src: String, pkg: JSONObject): String? {
+        try {
+            val code = pkg.optString("pickupCode")
+            val sn = pkg.optString("waybillNo").ifEmpty { pkg.optString("realWaybill") }
+            val ids = LinkedHashSet<String>(parcelIds(src, pkg))
+            if (code.isNotEmpty()) ids.add(code)
+            if (sn.isNotEmpty()) ids.add(sn)
+            val direct = pickKey(src, pkg)?.let { "$src:$it" }
+            val cache = PddCodeStore.all(this)
+            if (direct != null && cache.containsKey(direct)) return direct
+            for ((ck, cc) in cache) {
+                if (ck == direct || ck.substringAfter(':') in ids ||
+                    cc.code in ids || cc.waybill in ids
+                ) {
+                    Log.i("PickupSync", "标记键按身份匹配到 $ck（卡片规范键=$direct）")
+                    return ck
+                }
+            }
+            if (code.isEmpty()) return null
+            val key = direct ?: "$src:$code"
+            PddCodeStore.putForce(
+                this, key, PddCodeStore.Cached(
+                    src = src.ifEmpty { "pdd" },
+                    code = code,
+                    station = pkg.optString("stationText")
+                        .ifEmpty { pkg.optString("nickName") }.take(60),
+                    waybill = sn,
+                    latest = pkg.optString("latest").take(220),
+                    ts = System.currentTimeMillis(),
+                    pickedAt = 0L
+                )
+            )
+            Log.i("PickupSync", "缓存里没有这条，已按卡片新建：$key code=$code")
+            return key
+        } catch (t: Throwable) {
+            SafeRun.w("PickupSync", t)
+            return null
+        }
+    }
+
     private fun togglePickedFromCard(pkg: JSONObject) {
         try {
             val src = pkg.optString("src")
             val code = pkg.optString("pickupCode")
             val sn = pkg.optString("waybillNo").ifEmpty { pkg.optString("realWaybill") }
             val isPicked = pkg.optLong("pickedAt", 0L) != 0L
-            val k = if (sn.isNotEmpty()) "$src:$sn" else if (code.isNotEmpty()) "$src:$code" else ""
+            // ★ v1.3.3：键统一走解析器（原来自己拼 waybillNo 优先，与缓存键口径不一致 ⇒ 偶发"查不到"）
+            val k = resolvePickupKeyForCard(src, pkg).orEmpty()
             val c = if (k.isNotEmpty()) PddCodeStore.get(this, k) else null
             if (c == null) {
                 appToast(this, "这单没有取件码缓存，没法标记")
@@ -16680,7 +16733,8 @@ class MainActivity : Activity() {
                         // ★ vc311：手动「已取件」开关 —— 平台状态不更新时的兜底（同志 10-18 报的
                         //   "取走了不打标记"）。打上后自动轮次不许再撤（见 manualPickedAt）。
                         .setNeutralButton(if (isPicked) "取消已取件" else "标记已取件") { _, _ ->
-                            val k = if (sn != null) "$src:$sn" else ""
+                            // ★ v1.3.3：与卡片按钮同一条键解析路径
+                            val k = resolvePickupKeyForCard(src, pkg).orEmpty()
                             val c = if (k.isNotEmpty()) PddCodeStore.get(this@MainActivity, k) else null
                             if (c == null) {
                                 appToast(this@MainActivity, "这单没有取件码缓存，没法标记")
