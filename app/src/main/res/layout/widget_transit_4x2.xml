@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 途中快递小组件 4×2：同 2×2，中部多一条第二件快递的动态（w_trace2） -->
+<!-- 在途快递小组件 4×2：同 2×2，中部多一条第二件快递的动态（w_trace2） -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widget_root"
     android:layout_width="match_parent"
