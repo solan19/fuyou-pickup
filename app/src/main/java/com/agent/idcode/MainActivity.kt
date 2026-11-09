@@ -13998,6 +13998,30 @@ class MainActivity : Activity() {
             ).any { st.contains(it) }
         }
 
+        // ★★ vc710：**还没到驿站、又没有取件码的件，不进「取件码」页**。
+        //   同志 2026-11-09 截图实证：一张拼多多「待收货」卡（皇帝柑 · 极兔）被当成取件码卡
+        //   显示在"地址未识别"分组里 —— 它还在路上，属于「途中快递」页。
+        //   判据（三个都成立才剔）：① 没有取件码 ② 没有任何到站信息（驿站/代收点/柜/货架）
+        //   ③ 状态与最新轨迹里也没有"已到/待取/入柜/代收"这类词。
+        //   ⚠️ 这样不会误杀"刚到、码还没抓到"的件：那种件一定有到站信息或到站文案。
+        val ARRIVE_HINT = listOf(
+            "待取", "已到", "到达", "入柜", "代收", "驿站", "快递柜", "自提", "暂存", "取件", "派件"
+        )
+        pending.removeAll { p ->
+            if (p.optString("pickupCode").isNotBlank()) return@removeAll false
+            val addr = listOf("stationText", "stationName", "nickName", "shelfNo", "tip")
+                .joinToString(" ") { p.optString(it) }.trim()
+            if (addr.isNotBlank()) return@removeAll false
+            val st = p.optString("statusText") + " " + p.optString("latest")
+            if (ARRIVE_HINT.any { st.contains(it) }) return@removeAll false
+            Log.i(
+                "PickupGhost",
+                "剔除无码且未到站的卡：${p.optString("src")} ${p.optString("waybillNo")} " +
+                        "status=${p.optString("statusText")}"
+            )
+            true
+        }
+
         // ★ vc692：通知来源并入 —— IdNotifyListener 从拼多多 / 淘宝 / 京东等 App 的通知里
         //   白捡到的取件码（存在 PddCodeStore 的 "ntf:<码>" 条目里）。
         //   刻意放在黑名单与跨源去重**之前**：通知卡也要能被长按删除、也要和接口卡合并，
