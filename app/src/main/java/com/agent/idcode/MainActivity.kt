@@ -2043,6 +2043,43 @@ class MainActivity : Activity() {
                 if (before != mergedTransit.size) {
                     Log.i("PickupMuted", "途中栏按屏蔽名单剔除 ${before - mergedTransit.size} 件")
                 }
+                // ★★ v1.4.3：**名单条目若连续多轮仍是「运输中」，自动移出**。
+                //   一条进了名单的件，如果它实际一直没到站（每轮还在运输中/派送中），
+                //   说明这条多半是误加（或当时判断有误）⇒ 连续 3 轮仍运输中就自动放出来，
+                //   免得它永远卡在名单里、连"到站该提醒"的机会都没有。
+                val runningParcels = ArrayList<Pair<String, org.json.JSONObject>>()
+                for (q in mergedTransit) {
+                    val src = q.optString("src")
+                    if (stillRunning(q) && isPickupMuted(src, q, mutedNow)) {
+                        runningParcels.add(src to q)
+                    }
+                }
+                if (runningParcels.isNotEmpty()) {
+                    val still = HashSet<String>()
+                    for ((src, q) in runningParcels) {
+                        // 用卡的**全部身份**做计数键（orderSn / 运单 / 码 / src:键 任一），
+                        // 覆盖名单里裸单号与带前缀两种形态 —— 任一身份仍在途就累计轮次
+                        val ids = parcelIds(src, q).filter { it.isNotBlank() }
+                        val key = ids.firstOrNull { it in mutedNow } ?: ids.firstOrNull() ?: continue
+                        val n = (muteRunningRounds[key] ?: 0) + 1
+                        if (n >= 3) {
+                            muteRunningRounds.remove(key)
+                            try {
+                                for (id in ids) {
+                                    MuteStore.remove(this@MainActivity, id)
+                                    MuteStore.remove(this@MainActivity, "$src:$id")
+                                }
+                            } catch (t: Throwable) { SafeRun.w("MuteStore", t) }
+                            Log.i("MuteStore", "自动移出仍在途的项（连续多轮运输中）id=$key")
+                        } else {
+                            muteRunningRounds[key] = n
+                            still.add(key)
+                        }
+                    }
+                    for (k in muteRunningRounds.keys.toList()) {
+                        if (k !in still) muteRunningRounds.remove(k)
+                    }
+                }
             }
         }
         // ★ vc640：所有来源在合并后统一剔除已明确完成的包裹。
@@ -2067,6 +2104,14 @@ class MainActivity : Activity() {
         }.filterNot {
             it.optString("src") == "mi" && MiShopChannel.isStaleForTransit(it)
         })
+        // ★ v1.4.3：标签数字 = 过滤后实际显示的卡数（和眼睛看到的对得上）。
+        //   之前标签用各源原始抓取数（pdd=11），卡片还要过跨源去重 / 已到站分流取件码栏 /
+        //   终态剔除 / 名单过滤 ⇒ 数字总比卡片多。这里在 all（已去重+剔终态+剔名单）上按源统计。
+        transitShownCount.clear()
+        for (p in all) {
+            val s = p.optString("src")
+            transitShownCount[s] = (transitShownCount[s] ?: 0) + 1
+        }
         // ★ vc697：**只上屏当前平台标签的卡**（合并/去重/剔终态仍作用于全部来源，只在这里过一遍 src）
         val shown = ArrayList(all.filter { it.optString("src") == transitSrc })
         refreshTransitTabs()
@@ -2488,6 +2533,10 @@ class MainActivity : Activity() {
     private val transitRoundLoaded = HashSet<String>()
     /** 进页时刻（诊断用：看真实抓取多久回来） */
     private var transitEnterMs: Long = 0L
+    /** 各源在「过滤后实际显示」的卡数（标签数字用它，和看到的卡片数对得上） */
+    private val transitShownCount = HashMap<String, Int>()
+    /** 名单里每条「连续仍在运输中」的轮次（连续满 3 轮 ⇒ 自动移出，防误加永久卡死） */
+    private val muteRunningRounds = HashMap<String, Int>()
     private var transitGot = 0
     /**
      * vc274：第 5 栏的"轮次代数"——每开一轮 +1。
@@ -15688,6 +15737,13 @@ class MainActivity : Activity() {
         // ★ 各源条数 —— 「11 件只出 8 件」这类问题，一眼看出丢在哪一级
         line(null, "在途各源", "拼多多 ${pddTransit.size} / 京东 ${jdTransit.size} / " +
             "小米 ${miTransit.size} / 淘宝 ${tbTransit.size} / 手动 ${manualTransit.size}")
+        // ★ v1.4.3：屏蔽名单条数 —— 对账「删掉的件去哪了」一眼可见
+        try {
+            val muted = pickupMutedAll()
+            line(null, "屏蔽名单", "${muted.size} 条（删除取件码的件不再提醒；运输中仍照常显示）")
+        } catch (t: Throwable) {
+            line(null, "屏蔽名单", "读取失败：${t.message}")
+        }
         // 预计到达时间解析（本次新增）
         val etaSample = etaForCard("运输中 预计明天送达", "", "运输中")
         val etaSample2 = etaForCard("", "", "派送中")
@@ -15773,14 +15829,19 @@ class MainActivity : Activity() {
         else -> avail.first()
     }
 
-    /** 某个平台此刻在内存里有多少张卡（标签上的数字） */
-    private fun transitCountOf(src: String): Int = when (src) {
-        "pdd" -> pddTransit.size
-        "jd" -> jdTransit.size
-        "tb" -> tbTransit.size
-        "mi" -> miTransit.size
-        "manual" -> manualTransit.size
-        else -> 0
+    /** 某个平台此刻有多少张卡（标签上的数字）。
+     *  ★ v1.4.3：优先用过滤后的**显示数**（跨源去重+剔终态+名单+已到站分流之后），
+     *  让标签和实际卡片数对得上；尚无统计（进页前一瞬）时回退源原始数。 */
+    private fun transitCountOf(src: String): Int {
+        transitShownCount[src]?.let { return it }
+        return when (src) {
+            "pdd" -> pddTransit.size
+            "jd" -> jdTransit.size
+            "tb" -> tbTransit.size
+            "mi" -> miTransit.size
+            "manual" -> manualTransit.size
+            else -> 0
+        }
     }
 
     private fun transitTabChipText(src: String): String {
