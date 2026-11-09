@@ -3633,6 +3633,9 @@ class MainActivity : Activity() {
         //   --ez debug_track_dump true 把快照/跟踪名单/设置落盘，adb pull 出来看
         intent?.getStringExtra("debug_notify")?.let { TrackNotifier.notifyTest(this, it) }
         if (intent?.getBooleanExtra("debug_track_run", false) == true) TrackScheduler.runNow(this)
+        // ★ vc711：抖音接口调研页（只靠这个额外参数进入，正式版界面零改动）
+        //   启动：am start -n <pkg>/com.agent.idcode.MainActivity --ez debug_dy_probe true
+        if (intent?.getBooleanExtra("debug_dy_probe", false) == true) DyProbe.open(this, root)
         if (intent?.getBooleanExtra("debug_track_dump", false) == true) dumpTrackState()
         if (intent?.getBooleanExtra("debug_dump_tb", false) == true) debugDumpTb = true
         // vc268d：A 路探测开关（⚠️ 调试参数只在 onCreate 读 ⇒ 必须 force-stop 后再 am start）
@@ -8270,6 +8273,26 @@ class MainActivity : Activity() {
         val e = getSharedPreferences(PREFS, MODE_PRIVATE).edit()
         if (on) e.putLong("mpicked_$key", System.currentTimeMillis()) else e.remove("mpicked_$key")
         e.apply()
+        // ★★ v1.3.0：**同步写进取件码缓存**（同志 2026-11-09 报的 bug 的根因）——
+        //   首页那张「N 件待取」是按 PddCodeStore 的 pickedAt 算的，而这里原来只改 SP 里的
+        //   mpicked_* 账本 ⇒ 取件码页标了「已取件」，首页照旧显示"2 件待取"（两份账本各算各的）。
+        //   现在两处一起写：标记动作完成的那一刻，首页/组件/流体云就在同一步里同步。
+        //   （调用方本来就会 rebuildHome()，这里只补缓存与推送。）
+        try {
+            val c = PddCodeStore.all(this)[key]
+            if (c != null) {
+                PddCodeStore.put(
+                    this, key,
+                    c.copy(pickedAt = if (on) System.currentTimeMillis() else 0L)
+                )
+            } else {
+                Log.w("PickupSync", "标记已取件但缓存里没有这条：$key")
+            }
+            PickupPublish.publish(this, notifyNew = false)
+            Log.i("PickupSync", "标记已取件同步：$key on=$on")
+        } catch (t: Throwable) {
+            SafeRun.w("PickupSync", t)
+        }
     }
 
     /**
