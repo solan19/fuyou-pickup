@@ -397,6 +397,9 @@ class MainActivity : Activity() {
         transitLayer?.let { root.removeView(it) }
         transitLayer = null
         transitList = null
+        // ★ vc708：离页复位 —— 下次进"途中快递"仍播一次入场动画
+        transitPainted = false
+        expandedTransitKey = null
         transitSwipe = null
         transitStatus = null
         // ★ vc697：标签条随层一起消失（transitSrc 留着 —— 下次进来还停在上次看的平台）
@@ -1078,6 +1081,19 @@ class MainActivity : Activity() {
      */
     private var transitRenderAt = 0L
     private var transitRenderPending = false
+
+    /**
+     * ★ vc708：**消闪**两个状态位。
+     *  · [transitPainted]：本页是否已经播过入场动画 —— 动画只在"从空到有"播一次，
+     *    以前每次刷新都重播 ⇒ 一列卡片"刷"地重新淡入，这是"刷新就闪"的主因。
+     *  · [expandedTransitKey]：哪张卡是展开的（身份键 `src:单号`）——
+     *    以前重画时直接清掉展开态，用户展开的卡每刷一次就被合上。
+     */
+    private var transitPainted = false
+    private var expandedTransitKey: String? = null
+
+    /** ★ vc708：取件码页上一次渲染的内容指纹 —— 一致就整列不重画（消闪第二道闸） */
+    private var pickupRenderFp = ""
 
     private fun renderInTransitThrottled() {
         if (transitLayer == null) return
@@ -1904,6 +1920,8 @@ class MainActivity : Activity() {
             transitSwipe?.let { if (it.isRefreshing) it.isRefreshing = false }
         }
         // ★ vc232：列表要重画了，旧卡片会被丢掉 ⇒ 别再攥着它们的引用（否则收起一个已被回收的 view）
+        // ★ vc708：**只丢 View 引用、保留身份键** —— 重画后按 [expandedTransitKey] 把那张卡重新展开，
+        //   用户不会再看到"展开的卡自己合上"。
         expandedTransitDetail = null
         // 状态行：没全回来就显示"正在获取X物流"（但**继续画卡片**，不再 return）
         if (!useCache && transitGot < transitExpect) {
@@ -2276,6 +2294,8 @@ class MainActivity : Activity() {
                 if (current != null && current !== detail) animateHeight(current, false)
                 animateHeight(detail, opening)
                 expandedTransitDetail = if (opening) detail else null
+                // ★ vc708：记住"展开的是哪一张"（按身份键，重画后据此恢复）
+                expandedTransitKey = if (opening) "$src:$no" else null
             }
             // ★ 长按 = 是否删除（同志 2026-09-21 要求）。
             //   手动添加的单号**真删**（从 SP 列表移除，持久生效）；
@@ -2325,9 +2345,18 @@ class MainActivity : Activity() {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { topMargin = (10 * dp).toInt() })
             cards.add(card)
+            // ★ vc708：这张卡刷新前就是展开的 ⇒ 重画后自动展开回来（走与用户点击同一条路）
+            if (expandedTransitKey != null && expandedTransitKey == "$src:$no") {
+                head.post { head.performClick() }
+            }
         }
         // 错峰入场：每项延迟 30ms、淡入 + 上移 12dp（Linear 的列表节奏）
-        staggerIn(cards)
+        // ★★ vc708：**只在首次上屏播一次**。以前每次刷新都重播，一列卡片"刷"地重新淡入 ——
+        //   这是"刷新就闪"观感最大的来源；后续刷新一律不动画，只让变化的卡片静默替换。
+        if (!transitPainted) {
+            transitPainted = true
+            staggerIn(cards)
+        }
     }
 
     /** 预计剩余天数：只从轨迹文本里抠"预计X日/今天/明天"，抠不到就老实显示"在途中"，不编数字 */
@@ -14154,6 +14183,29 @@ class MainActivity : Activity() {
         //   新链路：先纯 HTTP 批量扫（2~5s）→ 取件页批量配对（~5s）→ 最后 1~2 单才逐单开页。
         //   ⚠️ 这里**只**调批量入口；逐单补码由作业内部收尾，不再挂在每次渲染上。
         ensurePddCodesBatch(pending)
+
+        // ★★ vc708：**同内容不重画**（消闪第二道闸）。取件码页每次源回调 / 补码都会走到这儿，
+        //   而多数回调算出来的东西与上一屏完全一样 —— 整列重建纯属"白闪"：
+        //   卡片会重播入场、滚动位置跳动、展开态丢失。
+        //   指纹一致就直接返回，页面一个像素都不动。
+        //   ⚠️ 位置很讲究：所有状态 / 通知 / LiveUpdate / 组件推送都在**这之前**跑过了，
+        //   所以只跳过"重建视图"这一步，功能一点不受影响。
+        val fpNow = buildString {
+            append(cainiaoNeedLogin).append('|')
+            for (p in pending) {
+                append(p.optString("src")).append(':')
+                append(p.optString("waybillNo")).append(':')
+                append(p.optString("pickupCode")).append(':')
+                append(p.optLong("pickedAt", 0L)).append(':')
+                append(p.optString("statusText")).append(':')
+                append(p.optString("goodsName")).append(';')
+            }
+        }
+        if (fpNow == pickupRenderFp && list.childCount > 0) {
+            Log.i("PickupRender", "内容未变，跳过重画（消闪）")
+            return
+        }
+        pickupRenderFp = fpNow
 
         list.removeAllViews()
 
