@@ -103,7 +103,7 @@ object PddNative {
         val candidateExpressUrls: Map<String, String> = emptyMap()
     )
 
-    /** ★ vc212：第 5 栏「途中快递」的原生在途单（与 PddChannel.parseInTransit 的产出语义同构） */
+    /** ★ vc212：第 5 栏「在途快递」的原生在途单（与 PddChannel.parseInTransit 的产出语义同构） */
     data class TransitItem(
         val orderSn: String,
         val goods: String,
@@ -1068,9 +1068,9 @@ object PddNative {
     // ---------------------------------------------------------------- ★ vc212：途中栏直取
 
     /**
-     * ★★ 第 5 栏「途中快递」真首页直取（2026-09-27）。
+     * ★★ 第 5 栏「在途快递」真首页直取（2026-09-27）。
      *
-     * 背景（取证见 文档\途中快递_第5栏_pdd在途不显示_修复_2026-09-27.md §六）：
+     * 背景（取证见 文档\在途快递_第5栏_pdd在途不显示_修复_2026-09-27.md §六）：
      * 订单 H5 页**首屏是 SSR 服务端直出、不发 XHR** —— WebHook 旁听 9 天 / 243 轮 / 350 次
      * order_list_v4 **全部带 offset**（0 次真首页），滚动 XHR 只能翻到 ~260720 之前的老单；
      * 最新单只出现在 track/status 里（只有 order_sn+status，无运单号/商品，喂不了途中栏）。
