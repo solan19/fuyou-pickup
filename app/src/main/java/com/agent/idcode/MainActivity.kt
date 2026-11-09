@@ -1986,17 +1986,39 @@ class MainActivity : Activity() {
                 //   而连途中栏也一起藏了（2026-11-09 报）。
                 //   ⇒ 名单只在**到站态**（有取件码 / 文案说到站待取代收入柜）时生效；
                 //     还在运输中、派送中的件照常显示 —— 它本来就该在这一栏。
-                val arriveHint = listOf("待取", "到站", "已到", "入柜", "代收", "驿站", "快递柜", "自提", "暂存")
-                val before = mergedTransit.size
-                mergedTransit.removeAll { q ->
-                    val atStation = q.optString("pickupCode").isNotBlank() ||
-                            arriveHint.any {
-                                (q.optString("statusText") + q.optString("latest") + q.optString("tip"))
-                                    .contains(it)
-                            }
-                    if (!atStation) return@removeAll false
-                    isPickupMuted(q.optString("src"), q, mutedNow)
+                val arriveHint = listOf(
+                    "待取", "到站", "已到", "入柜", "代收", "驿站", "快递柜", "自提", "暂存"
+                )
+                // ★★ v1.4.0：**还在运输中的件一律显示（无视名单）**。
+                //   同志实测：皇帝柑还在运输中却被藏了 —— 因为它的卡片里还留着上次补出来的
+                //   取件码/驿站文案，被判成"到站态"⇒ 名单一生效就整张藏掉了。
+                //   规则改成"运输中优先判定"：只要有运输中的信号，就照常显示。
+                val runningHint = listOf(
+                    "运输中", "运输", "派送中", "派件", "已发货", "待收货", "运送中", "揽收", "中转"
+                )
+                fun textOf(q: org.json.JSONObject): String =
+                    q.optString("statusText") + " " + q.optString("latest") + " " +
+                            q.optString("tip") + " " + q.optString("traceLines")
+
+                fun stillRunning(q: org.json.JSONObject): Boolean =
+                    runningHint.any { textOf(q).contains(it) }
+
+                fun atStation(q: org.json.JSONObject): Boolean =
+                    q.optString("pickupCode").isNotBlank() ||
+                            arriveHint.any { textOf(q).contains(it) }
+
+                val drop: (org.json.JSONObject) -> Boolean = { q ->
+                    !stillRunning(q) && atStation(q) && isPickupMuted(q.optString("src"), q, mutedNow)
                 }
+                val before = mergedTransit.size
+                mergedTransit.removeAll(drop)
+                // ★★ v1.4.0：**各源列表也一起剔**，否则标签数字（如「拼多多 11」）是按原始列表
+                //   算的，会出现"数字 11、卡片 7 张"的不一致。
+                pddTransit.removeAll(drop)
+                jdTransit.removeAll(drop)
+                miTransit.removeAll(drop)
+                manualTransit.removeAll(drop)
+                tbTransit.removeAll(drop)
                 if (before != mergedTransit.size) {
                     Log.i("PickupMuted", "途中栏按屏蔽名单剔除 ${before - mergedTransit.size} 件")
                 }
