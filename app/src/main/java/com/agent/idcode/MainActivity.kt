@@ -1952,6 +1952,32 @@ class MainActivity : Activity() {
         //   但码一没，它就满足途中栏"无码在途件"的收件条件 ⇒ 又被收进来
         //   （同志 2026-11-09 截图：删掉的化妆棉/洗面奶/沐浴露全部回到在途栏）。
         //   ⇒ 这里用**与取件码页同一份屏蔽名单、同一个判定函数**过滤，做到"删一次，两侧都消失"。
+        // ★★ v1.3.6：**真终态文案不进途中栏**（同志 2026-11-09 定的口径）。
+        //   · 强终态（自己就说明已经拿走了）：已领取 / 已取走 / 已取件 / 取件成功 /
+        //     代收点取件 / 代收点自提 / 已自提 / 本人已取 / 交易成功 / 已完成 ⇒ 直接不进；
+        //   · 弱终态「已签收」：只有**没有**任何到站/代收信息时才当终态 ——
+        //     代收点代收的件快递员一放下就显示"已签收"，但它其实还等着你去取（要保留）；
+        //   · 只有"已签收"三字、什么信息都没有 ⇒ 模糊，也保留（宁多显示，不误杀）。
+        run {
+            val strong = listOf(
+                "已领取", "已取走", "已取件", "取件成功", "代收点取件", "代收点自提",
+                "已在代收点", "已自提", "本人已取", "交易成功", "已完成"
+            )
+            val keepHint = listOf(
+                "到站", "待取", "入柜", "暂存", "代收", "驿站", "快递柜", "自提点", "派送", "已到"
+            )
+            val before = mergedTransit.size
+            mergedTransit.removeAll { q ->
+                val t = q.optString("statusText") + " " + q.optString("latest") + " " +
+                        q.optString("traceLines")
+                if (strong.any { t.contains(it) }) return@removeAll true
+                if (t.contains("已签收") && keepHint.none { t.contains(it) }) return@removeAll true
+                false
+            }
+            if (before != mergedTransit.size) {
+                Log.i("TransitTerminal", "途中栏剔除终态件 ${before - mergedTransit.size} 件")
+            }
+        }
         run {
             val mutedNow = pickupMutedAll()
             if (mutedNow.isNotEmpty()) {
