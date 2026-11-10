@@ -4967,12 +4967,19 @@ class MainActivity : Activity() {
             //   取件后首页与取件码页同步撤掉，不留"已取件"的格子。
             feedRows = feed.filter { !it.picked }.map { it.code to it.station.ifBlank { "驿站待取" } }
         } else {
-            codeList = PddCodeStore.all(this).values
-                .filter { !PddCodeStore.isPicked(it) && it.code.isNotBlank() && !PddCodeStore.looksTaken(it) }
-                .sortedByDescending { it.ts }
+            // ★★ v1.4.16：**冷启动第一帧也过黑名单**（同志 14:20：「首页会出现在黑名单中的
+            //   已删除的取件码，显示待取」）。主路径靠 renderMerged 发布的 [homePickupCodes]，
+            //   但冷启动首帧还没发布过、走的是这条回落路径 ⇒ 这里不挡就照样冒出已删的码。
+            codeList = PddCodeStore.all(this).entries
+                .filter { (k, c) ->
+                    !PddCodeStore.isPicked(c) && c.code.isNotBlank() &&
+                        !PddCodeStore.looksTaken(c) && !isCachedEntryMuted(k, c)
+                }
+                .sortedByDescending { it.value.ts }
                 // ★ vc605：同一取件码可能被两个来源各存一条（截图中 1-3-4021 出现两次）
                 //   ⇒ 按码去重，保留时间最新的那条
-                .distinctBy { it.code }
+                .distinctBy { it.value.code }
+                .map { it.value }
             feedRows = codeList.map { it.code to it.station.ifBlank { "驿站待取" } }
         }
         // ★ vc584：条数只认缓存（清空缓存就该显示 0）；旧写法回退 SP 历史计数 ⇒ 清了还显示旧数字
@@ -13599,6 +13606,15 @@ class MainActivity : Activity() {
      * · 其它（长按删除）= 可能是误删 ⇒ 件还在运输中/待确认时放行（误删保护）。
      * 这个区分是「清已取后快递又回到在途栏」那条 bug 的正根，见 [TransitRules.judge] 判据①。
      */
+    /**
+     * ★★ v1.4.16：**缓存条目**是否命中黑名单（key 形如 `pdd:订单号`）。
+     *
+     * 与 [pickupMuteHit] 的区别：那个吃的是实时卡片 JSON，这个吃 `PddCodeStore` 的条目 ——
+     * 首页冷启动首帧只有缓存、没有实时卡，得用这条。
+     */
+    private fun isCachedEntryMuted(key: String, c: PddCodeStore.Cached): Boolean =
+        MuteStore.blocks(this, c.src, key.substringAfter(':'), c.waybill, c.code, c.station) != null
+
     private fun pickupMuteHit(src: String, p: JSONObject): MuteStore.Entry? {
         val hit = MuteStore.blocks(
             this,
@@ -15068,6 +15084,24 @@ class MainActivity : Activity() {
         //     的 W: 键负责（下一轮渲染就会跟菜鸟同运单卡合并），不靠上屏。
         val visible = ArrayList<JSONObject>()
         for (p in pending) {
+            // ★★ v1.4.16：**命中黑名单的卡不上屏**（同志 14:20：「首页会出现在黑名单中的
+            //   已删除的取件码，显示待取」）。
+            //
+            //   为什么以前会跑出来：清已取 / 长按删除写进黑名单后，[PickedStore] 的标记和
+            //   缓存条目都被撤掉，平台下一轮照样把它当"在驿站待取"报上来 ⇒ 这张卡重新变成
+            //   一张**普通的待取卡**，于是取件码页上屏、首页也跟着发格子。
+            //   黑名单只挡住了「在途快递」，没挡「取件码」——这条链一直缺一道闸。
+            //
+            //   ⚠️ 时间语义靠 [MuteStore.Entry.holdUntil]，这里不用再判一次：
+            //   · 「标记已取件」写的记录 holdUntil = 24h 后 ⇒ 此刻 blocks() 返回 null ⇒ 灰卡照旧显示；
+            //   · 「清已取 / 长按删除」写的记录 holdUntil = 0 ⇒ 立刻生效 ⇒ 卡片从这里就被挡住。
+            if (pickupMuteHit(p.optString("src"), p) != null) {
+                Log.i(
+                    "PickupMuted",
+                    "黑名单里的卡不上屏：${p.optString("orderSn").take(22)} 码=${p.optString("pickupCode")}"
+                )
+                continue
+            }
             // ★★ v1.4.12（同志 13:08）：「标记完以后还和之前一样**留存 24 小时**，或者手动删除」——
             //   所以打了「已取件」的卡**照旧上屏**（灰标 + 码划掉），24h 后由
             //   [PickedStore] / [MuteStore] 两边同时让它退场（时长都是 PICKED_TAG_KEEP_HOURS）。
