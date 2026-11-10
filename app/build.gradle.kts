@@ -250,13 +250,22 @@ android {
         //   ③ 后台运行：原来跳 ACTION_MANAGE_OVERLAY_PERMISSION（悬浮窗），本应用没声明
         //      SYSTEM_ALERT_WINDOW ⇒ 改跳各 ROM 的真自启动页（本机实测 com.oplus.battery 的
         //      StartupAppListActivity 就是「自启动」），全不认时兜到应用信息页。
+        // v1.4.19：**UI 整体换成 ColorOS 17「凝光」**（同志 2026-11-10 15:11 定，从 A/B/C/D 四稿里选的 D）。
+        //   功能代码一行未动，只换视觉层：
+        //   ① 色板改凝光官方值（昼 #F0F1F2 底 + 白卡 + #0080FF；夜纯黑底 + 10% 白卡 + #1A8CFF）；
+        //   ② 圆角全部换成**超椭圆**（SquircleDrawable，n=2.5，照 COUI 的 CouiShape 几何），
+        //      不是 GradientDrawable 那种四分之一圆弧 —— 这是和系统自带卡片"看起来是一家"的关键；
+        //   ③ 深色卡片加**顶部轮廓光**（光从上面来），纯黑底上全靠它把卡边提起来；
+        //   ④ 首页主卡改凝光版式：待取数字 56sp 独占一行（全 App 只有它和 41sp 的取件码算大字）、
+        //      「取件码」做成胶囊 chip、主按钮统一凝光蓝胶囊（上浅下深，昼夜都蓝，不再反白）；
+        //   ⑤ 圆角档位 6/10/14/20 → 8/12/16/22（22 给分组卡、28 给主卡），字号新增 41 / 56 两档。
         // v1.4.18：**流体云/小组件/岛通知统一走 PickupGate（含黑名单闸）**。同志 14:36：
         //   「流体云仍然弹出有 3 个快递，但目前只有一个取件码」。根因是"哪些码该发布"
         //   在四条链上各判一遍，后三条（PickupPublish / LiveUpdate 补推 / IslandHelper 补推）
         //   都只判 "有码 + 未取件"、**没过黑名单**；而且 PickupPublish 用整个 PddCodeStore、
         //   补推用 ExpressStore 快照交集 ⇒ 两个数据源互相覆盖，指纹来回翻（"没遵循规则"）。
-        versionCode = 737
-        versionName = "1.4.18"
+        versionCode = 738
+        versionName = "1.4.19"
     }
 
     buildTypes {
