@@ -4,7 +4,7 @@ import android.content.Context
 import org.json.JSONObject
 
 /**
- * ★★ vc674：**「已取件」标记按包裹身份持久化**（订单号 / 运单号 / 取件码）。
+ * ★★ vc674：**「已取件」标记按包裹身份持久化**（订单号 / 运单号）。
  *
  * ## 为什么不能只写在缓存条目的 `pickedAt` 上
  * 同一件包裹在缓存里可能有多条：`pdd:订单号`、`cainiao:运单号`，甚至重启后被
@@ -13,14 +13,34 @@ import org.json.JSONObject
  * "打了已取件，退出重进又回来了"（同志 2026-11-03 实测）。
  *
  * ## 现在的口径
- * 标记记在**身份**上（取件码 / 运单号），[PddCodeStore.all] 读缓存时按身份补 `pickedAt`。
+ * 标记记在**身份**上（订单号 / 运单号），[PddCodeStore.all] 读缓存时按身份补 `pickedAt`。
  * 于是不管这条件从哪个来源、以什么键重新出现，只要身份对得上就仍然是「已取件」。
- * 有效期与灰标一致（[PddCodeStore.PICKED_KEEP_MS] = 24h），过期自动失效。
+ * 有效期与灰标一致（[PddCodeStore.PICKED_KEEP_MS]）。
+ *
+ * ## ★★ v1.4.11：**取件码不再算身份**
+ * 事故（同志 2026-11-10）：「114-4-9453 是今天刚到的润唇膏的码，我还没取」，
+ * 可它昨天属于另一件、那件已经取走了 ⇒ 只要 `picked_ids` 里存过这个码，
+ * 今天这枚码一出现就会被判「已取件」，卡上直接划掉、首页也不算待取。
+ * **格口码会被驿站复用**（这与黑名单误伤化妆棉是同一个坑），
+ * 拿它当身份等于让"上一件的取件动作"传染给下一件。
+ * ⇒ 打标/查标/取消全部跳过形如 `1-2-3456` 的取件码，只认订单号与运单号；
+ *    老数据里的码身份在 [load] 里读时就丢弃，下一次写盘自然清掉。
  */
 object PickedStore {
 
     private const val PREFS = "idcode_prefs"
     private const val KEY = "picked_ids"
+
+    /** 取件码形如 `114-4-9453` / `2-3-0009`（格口码，可复用，不能当身份） */
+    private val CODE_LIKE = Regex("""^\d{1,3}-\d{1,3}-\d{1,4}$""")
+
+    /** 过滤掉不能当身份的值；返回 null 表示这个 id 不参与标记 */
+    private fun usable(raw: String): String? {
+        val s = raw.trim()
+        if (s.isEmpty() || s == "null") return null
+        if (CODE_LIKE.matches(s)) return null
+        return s
+    }
 
     /** 内存缓存：id → 打标时刻。避免 [PddCodeStore.all] 每次都解析 SP */
     private var mem: MutableMap<String, Long>? = null
@@ -38,7 +58,8 @@ object PickedStore {
                 val o = JSONObject(raw)
                 val it = o.keys()
                 while (it.hasNext()) {
-                    val id = it.next()
+                    // ★★ v1.4.11：老数据里的取件码身份直接丢掉（复用的码会误伤新件）
+                    val id = usable(it.next()) ?: continue
                     val ts = o.optLong(id, 0L)
                     if (ts > 0 && now - ts < PddCodeStore.PICKED_KEEP_MS) out[id] = ts
                 }
@@ -67,22 +88,20 @@ object PickedStore {
         val m = load(ctx)
         var best = 0L
         for (id in ids) {
-            val s = id.trim()
-            if (s.isEmpty()) continue
+            val s = usable(id) ?: continue
             val t = m[s] ?: continue
             if (t > best) best = t
         }
         return best
     }
 
-    /** 打标（整件包裹的全部身份都记上，跨来源、跨重启都认） */
+    /** 打标（整件包裹的订单号/运单号都记上，跨来源、跨重启都认；取件码跳过） */
     fun mark(ctx: Context, ids: Collection<String>) {
         val m = load(ctx)
         val now = System.currentTimeMillis()
         var n = 0
         for (id in ids) {
-            val s = id.trim()
-            if (s.isEmpty() || s == "null") continue
+            val s = usable(id) ?: continue
             m[s] = now
             n++
         }
@@ -97,7 +116,8 @@ object PickedStore {
         val m = load(ctx)
         var n = 0
         for (id in ids) {
-            if (m.remove(id.trim()) != null) n++
+            val s = usable(id) ?: continue
+            if (m.remove(s) != null) n++
         }
         if (n > 0) {
             save(ctx, m)

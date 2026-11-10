@@ -123,11 +123,14 @@ object PddCodeStore {
                 val k = it.next()
                 val v = o.optJSONObject(k) ?: continue
                 var c = Cached.from(v)
-                // ★★ vc674：缓存条目自己没标「已取件」时，按**包裹身份**（取件码/运单号）
+                // ★★ vc674：缓存条目自己没标「已取件」时，按**包裹身份**（订单号/运单号）
                 //   再问一次 [PickedStore] —— 重启后同件被别的来源重新写进来（新键、
                 //   pickedAt=0）时，就靠这一步把标记找回来，否则「退出重进又回来了」。
+                //   ★★ v1.4.11：**不再拿取件码去问**。格口码会被驿站复用（同志 11-10：
+                //   114-4-9453 昨天属于已取走的件、今天分给了刚到站的润唇膏），
+                //   用码反查会让"上一件的取件动作"传染给下一件。
                 if (c.pickedAt == 0L) {
-                    val t = PickedStore.of(ctx, listOf(c.code, c.waybill))
+                    val t = PickedStore.of(ctx, listOf(c.waybill, k.substringAfter(':')))
                     if (t > 0L) c = c.copy(pickedAt = t)
                 }
                 // ★★ v1.4.8：**历史脏站名自愈**。1.4.8 之前 [TrackFetcher] 会把
