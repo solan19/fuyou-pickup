@@ -28,7 +28,8 @@ import kotlin.math.sqrt
  * 一次画三样（这也是 GradientDrawable 组合不出来的）：
  *  1. **填充**：可上下渐变。主按钮的凝光蓝就是 `#2E9BFF → #0080FF`；
  *  2. **描边**：极细半透明，深色下用来勾出边界（白天几乎看不见）；
- *  3. **轮廓光**：顶部一条 1dp 亮线，往下 55% 高度渐隐 —— 光从上面来，这是"凝光"的签名。
+ *  3. **轮廓光**：近边线（顶，亮）+ 远边线（底，暗）双线，各带渐隐 ——
+ *     CouiContourPresets 的 near/far 线口径（v1.4.20 升级，原先是单条顶部亮线）。
  *
  * 性能：Path 只在**尺寸变化时**重建（卡片尺寸基本不变），每帧只是 `drawPath` 三次；
  * 低端机上比 `backdrop-filter` 那套真实模糊便宜太多，所以这里不做运行时降级。
@@ -75,19 +76,63 @@ class SquircleDrawable(
             )
         }
         if (contour) {
-            // 顶部亮线：从 0 处的白 55% 渐隐到 55% 高度处完全透明
+            // ★ v1.4.20 近/远双线：近边线（顶）亮 → 中段隐 → 远边线（底）暗
+            //   （CouiContourPresets：near 0.7α / far 0.6α 双线，此处按 55%/30% 白落地）
             contourPaint.shader = LinearGradient(
-                0f, 0f, 0f, builtH * 0.55f,
-                intArrayOf(0x8CFFFFFF.toInt(), 0x00FFFFFF),
-                floatArrayOf(0f, 1f),
+                0f, 0f, 0f, builtH,
+                intArrayOf(
+                    (UiTok.CONTOUR_NEAR shl 24) or 0xFFFFFF,
+                    0x00FFFFFF,
+                    (UiTok.CONTOUR_FAR shl 24) or 0xFFFFFF,
+                ),
+                floatArrayOf(0f, 0.52f, 1f),
                 Shader.TileMode.CLAMP
             )
         }
     }
 
-    /** 超椭圆路径：四角各采样 segments*2+1 个点，拼成闭合 Path */
+    /** 超椭圆路径：委托 [SquirclePath]（与 [BackdropBlurDrawable] 共用同一套几何） */
     private fun buildPath(w: Float, h: Float) {
         path.reset()
+        if (w > 0f && h > 0f) SquirclePath.build(path, w, h, radiusPx)
+    }
+
+    override fun draw(canvas: Canvas) {
+        val b = bounds
+        if (b.isEmpty) return
+        canvas.save()
+        canvas.translate(b.left.toFloat(), b.top.toFloat())
+        canvas.drawPath(path, fillPaint)
+        if (strokePx > 0f) canvas.drawPath(path, strokePaint)
+        if (contour) canvas.drawPath(path, contourPaint)
+        canvas.restore()
+    }
+
+    override fun setAlpha(alpha: Int) {
+        fillPaint.alpha = alpha
+        strokePaint.alpha = alpha
+        contourPaint.alpha = alpha
+        invalidateSelf()
+    }
+
+    override fun setColorFilter(colorFilter: ColorFilter?) {
+        fillPaint.colorFilter = colorFilter
+        strokePaint.colorFilter = colorFilter
+        contourPaint.colorFilter = colorFilter
+        invalidateSelf()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+}
+
+/**
+ * 超椭圆路径构建（Lp 范数 n=2.5）—— [SquircleDrawable] 与 [BackdropBlurDrawable] 共用，
+ * 保证玻璃面与实心卡的弧线**完全一致**（同一公式只算一份，杜绝两处几何漂移）。
+ */
+internal object SquirclePath {
+    /** 四角各采样 segments*2+1 个点，拼成闭合 Path；线段误差上限 0.05px */
+    fun build(path: Path, w: Float, h: Float, radiusPx: Float) {
         if (w <= 0f || h <= 0f) return
         val r = radiusPx.coerceIn(0f, minOf(w, h) / 2f)
         if (r <= 1f) {
@@ -120,32 +165,4 @@ class SquircleDrawable(
         }
         path.close()
     }
-
-    override fun draw(canvas: Canvas) {
-        val b = bounds
-        if (b.isEmpty) return
-        canvas.save()
-        canvas.translate(b.left.toFloat(), b.top.toFloat())
-        canvas.drawPath(path, fillPaint)
-        if (strokePx > 0f) canvas.drawPath(path, strokePaint)
-        if (contour) canvas.drawPath(path, contourPaint)
-        canvas.restore()
-    }
-
-    override fun setAlpha(alpha: Int) {
-        fillPaint.alpha = alpha
-        strokePaint.alpha = alpha
-        contourPaint.alpha = alpha
-        invalidateSelf()
-    }
-
-    override fun setColorFilter(colorFilter: ColorFilter?) {
-        fillPaint.colorFilter = colorFilter
-        strokePaint.colorFilter = colorFilter
-        contourPaint.colorFilter = colorFilter
-        invalidateSelf()
-    }
-
-    @Deprecated("Deprecated in Java")
-    override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
 }

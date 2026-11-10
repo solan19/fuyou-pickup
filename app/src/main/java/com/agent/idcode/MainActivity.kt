@@ -10944,9 +10944,8 @@ class MainActivity : Activity() {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            // 底部 28dp：与主页右下角设置键的离底距离一致（手势条避让）
-            // ★ vc583：同志要求抬高 —— 离底 28 → 48dp
-            setPadding(0, (UiTok.S8 * dp).toInt(), 0, (48 * dp).toInt())
+            // ★ v1.4.20：玻璃胶囊内衬（48dp 离底移到 glass 的 bottomMargin，见下）
+            setPadding((10 * dp).toInt(), (9 * dp).toInt(), (10 * dp).toInt(), (9 * dp).toInt())
         }
         row.addView(dockCell("淘", "#FF5000", getString(R.string.bar_taobao)) {
             openWeb(TAOBAO_URL, getString(R.string.web_title), accent = "#FF5000")
@@ -10957,10 +10956,29 @@ class MainActivity : Activity() {
         row.addView(dockCell("菜", "#0078FF", getString(R.string.bar_cainiao)) {
             openWeb(TAOBAO_URL, getString(R.string.web_title_cainiao), cainiaoIdentity = true)
         })
-        dock.addView(row, FrameLayout.LayoutParams(
+        // ★ v1.4.20：凝光玻璃胶囊 —— 背景采样 → 模糊 → 材质混色 → 轮廓光 四段全走。
+        //   采样源 pickupScroll（惰性取，层重建跟得上）；玻璃自身采样时临时隐藏，零递归。
+        //   列表从底下滚过时模糊实时跟手，这正是"凝光"浮层的签名。
+        val glass = FrameLayout(this).apply {
+            isClickable = false
+            isFocusable = false
+        }
+        glass.addView(row, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ))
+        NingGuang.glass(
+            target = glass,
+            source = { pickupScroll },
+            dark = isDark(),
+            cornerDp = UiTok.R999,   // 胶囊：超椭圆半径自动 clamp 到半高
+        )
+        dock.addView(glass, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
             Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-        ))
+        ).apply {
+            // ★ vc583 口径不变：离底 48dp（手势条避让），从 row 的内边距挪到胶囊外距
+            bottomMargin = (48 * dp).toInt()
+        })
         // ★ vc321：挂进取件码层（原挂 root）—— 层内后加 ⇒ z 序仍压在卡片列表上方；
         //   层被跟手滑出/淡出时图标跟着走，淡入直接继承 layerIn 的 220ms，不单独播。
         parent.addView(dock, FrameLayout.LayoutParams(
@@ -11058,18 +11076,9 @@ class MainActivity : Activity() {
             contentDescription = getString(R.string.cd_settings)
             if (isDark()) setColorFilter(cTextPrimary)
         }
-        // ★ vc569：背景色与首页卡片**完全同源**（cCard + 柔光描边），不再用单独的 #2A3038
-        val bg = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            cornerRadius = UiTok.R999 * dp
-            setColor(cCard)
-            setStroke(
-                maxOf(1, (UiTok.HAIR * dp).toInt()),
-                if (isDark()) 0x14FFFFFF else 0x0F000000
-            )
-        }
+        // ★ v1.4.20：设置键换凝光玻璃 —— 采样首页内容（homeView 惰性取源，
+        //   首页 rebuild 后不会采到旧尸体），四段管线与 dock 同源。
         val box = FrameLayout(this).apply {
-            background = RippleDrawable(ColorStateList.valueOf(cRipple), bg, bg)
             isClickable = true
             isFocusable = true
             setOnClickListener { v ->
@@ -11104,6 +11113,15 @@ class MainActivity : Activity() {
                 }, 400)
             }
         }
+        // ★ v1.4.20：玻璃面 + 涟漪（RippleDrawable 的 content/mask 都用玻璃，
+        //   涟漪裁剪跟着超椭圆走，比旧的 OVAL GradientDrawable 更贴形）
+        val glassD = NingGuang.glass(
+            target = box,
+            source = { if (::homeView.isInitialized) homeView else null },
+            dark = isDark(),
+            cornerDp = UiTok.R999,
+        )
+        box.background = RippleDrawable(ColorStateList.valueOf(cRipple), glassD, glassD)
         box.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
             try {
                 val loc = IntArray(2)

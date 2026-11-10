@@ -250,6 +250,17 @@ android {
         //   ③ 后台运行：原来跳 ACTION_MANAGE_OVERLAY_PERMISSION（悬浮窗），本应用没声明
         //      SYSTEM_ALERT_WINDOW ⇒ 改跳各 ROM 的真自启动页（本机实测 com.oplus.battery 的
         //      StartupAppListActivity 就是「自启动」），全不认时兜到应用信息页。
+        // v1.4.20：**凝光管线端到端走通：背景采样 → 模糊 → 材质混色 → 轮廓光**（同志 15:56 定路线 C，一加 13）。
+        //   ① 新增 NingguangGlass：BackropBlurDrawable 四段管线 + NingGuang.glass() 接入器；
+        //      采样 = 1/8 降采样捕获"玻璃背后的内容"（玻璃自身采样时隐藏，零递归）；
+        //      模糊 = RenderNode.setRenderEffect 高斯（Paint 没有 setRenderEffect，SDK javap 实锤）；
+        //      材质 = 先 luminosity 压明度、再 blendAlpha 混第二层（CouiMaterial 文档口径，两色输入）；
+        //      轮廓光 = 近边线（顶 55% 白）+ 远边线（底 30% 白）双线（CouiContourPresets 口径）。
+        //   ② 落地两处悬浮面：取件码页底部 dock 升凝光玻璃胶囊（列表滚过模糊跟手）、
+        //      首页设置键换玻璃圆钮（采样 homeView，惰性取源防重建尸体）。
+        //   ③ SquirclePath 抽出共用几何（SquircleDrawable / BackdropBlurDrawable 弧线严格一致）；
+        //      SquircleDrawable 轮廓光同步升级双线。
+        //   功能代码一行未动。一加 13（8 Elite / ColorOS 16）无降级路径顾虑。
         // v1.4.19：**UI 整体换成 ColorOS 17「凝光」**（同志 2026-11-10 15:11 定，从 A/B/C/D 四稿里选的 D）。
         //   功能代码一行未动，只换视觉层：
         //   ① 色板改凝光官方值（昼 #F0F1F2 底 + 白卡 + #0080FF；夜纯黑底 + 10% 白卡 + #1A8CFF）；
@@ -264,8 +275,8 @@ android {
         //   在四条链上各判一遍，后三条（PickupPublish / LiveUpdate 补推 / IslandHelper 补推）
         //   都只判 "有码 + 未取件"、**没过黑名单**；而且 PickupPublish 用整个 PddCodeStore、
         //   补推用 ExpressStore 快照交集 ⇒ 两个数据源互相覆盖，指纹来回翻（"没遵循规则"）。
-        versionCode = 738
-        versionName = "1.4.19"
+        versionCode = 739
+        versionName = "1.4.20"
     }
 
     buildTypes {

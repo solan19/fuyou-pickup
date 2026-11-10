@@ -109,4 +109,29 @@ object UiTok {
 
     /** 强调色的 10~15% 淡底（chip / 选中态） */
     fun accentSoft(dark: Boolean): Int = if (dark) 0x331A8CFF else 0x1A0080FF
+
+    // ---------- 凝光效果（管线：背景采样 → 模糊 → 材质混色 → 轮廓光） ----------
+    /** 背景采样降采样分母（1/8）——采样图小、GPU 模糊便宜；一加 13 与低端机同参 */
+    const val SAMPLE_SCALE = 8
+
+    /** 玻璃面高斯模糊半径（dp）——只给悬浮面（dock / 悬浮按钮），实心卡不需要 */
+    const val BLUR_GLASS = 22
+
+    /**
+     * 材质第一层（**先 luminosity**）：昼冷白 70% / 夜深灰 60%。
+     * 作用是把背景明度压到材质本色的明度上 —— 玻璃才"雾"得住（CouiMaterial 口径）。
+     */
+    fun matFirst(dark: Boolean): Int = if (dark) 0x9912161C.toInt() else 0xB3EEF1F4.toInt()
+
+    /** 材质第二层（以 blendAlpha 混合）：昼白 40% / 夜白 10% */
+    fun matSecond(dark: Boolean): Int = if (dark) 0x1AFFFFFF else 0x66FFFFFF
+
+    /** 第二层混合强度（COUI 的 blend alpha；模式固定 Overlay，文档默认值） */
+    const val MAT_BLEND_ALPHA = 0.55f
+
+    /** 轮廓光近边线（顶，亮）——CouiContourPresets 的 near 线（0.7α ≈ 55% 白） */
+    const val CONTOUR_NEAR = 0x8C
+
+    /** 轮廓光远边线（底，暗）——CouiContourPresets 的 far 线（0.6α ≈ 30% 白） */
+    const val CONTOUR_FAR = 0x4D
 }
