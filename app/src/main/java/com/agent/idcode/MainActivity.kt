@@ -15361,6 +15361,8 @@ class MainActivity : Activity() {
                     put("goodsName", "通知里的取件码")
                     put("statusText", "待取件")
                     put("latest", c.latest)
+                    // ★ v1.4.24：把通知来源平台带给卡面（「通知·抖音」）
+                    put("platform", c.platform)
                     if (c.station.isNotBlank()) {
                         put("stationText", c.station)
                         put("nickName", c.station)
@@ -18115,6 +18117,13 @@ class MainActivity : Activity() {
                     platText = label
                     headRow.addView(chip(label, color), chipLp())
                 }
+            }
+            // ★ v1.4.24：通知来源以前落进 else 被标成「菜鸟」—— 改成「通知·平台」；
+            //   旧数据没有 platform 时只显示「通知」，不猜平台名。
+            "ntf" -> {
+                val pLabel = NotifyRules.labelOf(pkg.optString("platform"))
+                platText = if (pLabel.isEmpty()) "通知" else "通知·$pLabel"
+                headRow.addView(chip(platText, "#7A5AF8"), chipLp())
             }
             else -> { platText = getString(R.string.cainiao_tag)
                 headRow.addView(chip(platText, "#0078FF"), chipLp()) }

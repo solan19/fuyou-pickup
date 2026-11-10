@@ -91,7 +91,12 @@ object PddCodeStore {
          * 主号和副号的状态会混在一起。出问题时（码莫名其妙消失 / 重复）
          * 日志里必须能看出"这码归谁"，否则只能猜。
          */
-        val account: String = ""
+        val account: String = "",
+        /**
+         * ★ v1.4.24：**这条码是哪个 App 的通知送来的**（平台 id，见 [NotifyRules]）。
+         * 空 = 接口来源或旧数据。`src` 仍是 "ntf"，所有既有 src 判断链不受影响。
+         */
+        val platform: String = ""
     ) {
         fun toJson(): JSONObject = JSONObject().apply {
             put("src", src)
@@ -102,6 +107,7 @@ object PddCodeStore {
             put("ts", ts)
             put("pickedAt", pickedAt)
             put("account", account)
+            put("platform", platform)
         }
 
         companion object {
@@ -114,7 +120,9 @@ object PddCodeStore {
                 ts = o.optLong("ts"),
                 // 旧数据没有这个字段 ⇒ optLong 给 0（按"还在待取"处理）
                 pickedAt = o.optLong("pickedAt"),
-                account = o.optString("account")
+                account = o.optString("account"),
+                // 旧数据没有这个字段 ⇒ optString 给空串（按"接口/未知来源"处理）
+                platform = o.optString("platform")
             )
         }
     }
@@ -207,7 +215,9 @@ object PddCodeStore {
         // ★ vc655：pickedAt 与 account 都沿用旧值（新值为空时），避免整条重建把归属抹掉
         val merged = c.copy(
             pickedAt = if (c.pickedAt == 0L) old?.pickedAt ?: 0L else c.pickedAt,
-            account = if (c.account.isBlank()) old?.account.orEmpty() else c.account
+            account = if (c.account.isBlank()) old?.account.orEmpty() else c.account,
+            // ★ v1.4.24：整条重建的补码作业不该把通知来源的平台标签抹掉
+            platform = if (c.platform.isBlank()) old?.platform.orEmpty() else c.platform
         )
         map[sn] = merged
         save(ctx, map)

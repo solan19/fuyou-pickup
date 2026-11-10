@@ -2,11 +2,9 @@ package com.agent.idcode
 
 import android.app.Notification
 import android.content.Context
-import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
-import java.util.regex.Pattern
 
 /**
  * ★ 系统绑定型服务（手册第 3 层：manifest 清单 ④）
@@ -15,18 +13,22 @@ import java.util.regex.Pattern
  * `NotificationListenerService` 由**系统（SystemUI/NMS）亲自绑定** ⇒
  *   ① 系统绑定的服务优先级天然高一档
  *   ② 进程死了系统会**自动重绑**（等于白捡一条复活路径）
- * 手册把它列为"可选但强烈建议"，正是这个原因。
  *
- * ## 顺带的第二价值：白捡通知里的取件码
- * 菜鸟 / 微信 / 各快递 App 的到件通知里常常**直接写着取件码** ——
- * 这是"别人替你跑"的免费通道（不花快递100 的钱、不需要登录任何电商账号）。
- * 解析规则借鉴 GitHub `fanhua12/express-pickup`：先看像不像快递消息，再用正则抠码。
+ * ## 第二价值：白捡通知里的取件码（★ v1.4.24 平台化）
+ * 规则全部收敛到 [NotifyRules]，写入全部收敛到 [NotifyCodeSink]：
+ *   包名 → 白名单平台 → 该平台关键词 → 强取件语义闸 → 抠码 → 唯一写入出口。
+ *
+ * 与 v1.4.23 之前的差别：
+ *   · 不再对**任何 App** 的通知跑同一套正则（营销 push 里的数字不再被当码）；
+ *   · 抖音 / 小红书 / 团购自提的「提货码 / 自提码 / 货架号 / 取件凭证」能认了；
+ *   · 写入前补上黑名单与作废码闸，删掉的码不会被通知贴回来；
+ *   · 条目带 `platform`，取件码页显示「通知·抖音」而不是笼统的「通知」；
+ *   · 不再把通知全文塞进 `latest`（只留平台摘要）。
  *
  * ⚠️ 前提：用户要在系统设置里开「通知使用权」；没开时本服务不会被绑定，
  *   也不影响蜉蝣其它任何功能（只是少了这一层）。
  *
  * ★ vc316（同志 2026-10-18 定）：**App 不再自己猜「件取没取走」** ——
- *   既不靠系统通知（没装菜鸟 App 就没这条通道），也不靠数据源推断。
  *   「已取件」只由用户长按取件码卡片手动打标记（24h 后自动清）。本服务只保留"白捡取件码"这一件事。
  */
 class IdNotifyListener : NotificationListenerService() {
@@ -42,11 +44,16 @@ class IdNotifyListener : NotificationListenerService() {
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
-        val n = sbn?.notification ?: return
+        val s = sbn ?: return
+        val n = s.notification ?: return
         // 自己发的通知别再抓，会循环
-        if (sbn.packageName == packageName) return
-        val extras = n.extras ?: return
+        if (s.packageName == packageName) return
 
+        // ★★ v1.4.24 唯一准入闸：总开关 + 包名在白名单 + 该平台被用户勾选
+        if (!NotifyPrefs.isAllowed(this, s.packageName)) return
+        val platform = NotifyRules.platformOf(s.packageName) ?: return
+
+        val extras = n.extras ?: return
         val pool = StringBuilder()
         appendText(pool, extras.getCharSequence(Notification.EXTRA_TITLE))
         appendText(pool, extras.getCharSequence(Notification.EXTRA_TEXT))
@@ -56,42 +63,30 @@ class IdNotifyListener : NotificationListenerService() {
         if (lines != null) for (l in lines) appendText(pool, l)
 
         val text = pool.toString()
-        // 先合起来看一眼像不像快递消息，不像就直接走（省得每条通知都白忙）
-        if (!looksLikeExpress(text)) return
+        if (text.isBlank()) return
 
-        val code = pickCode(text)
-        if (code.isBlank()) {
-            Log.i(TAG, "像快递消息但没抠到取件码（来源 ${sbn.packageName}）")
-            // ★ vc708：「到站 / 派件」这类没有码的通知同样值得立刻抓一轮 ——
-            //   码本来就该由接口给，通知只是**触发器**。
-            maybeTriggerImmediateFetch(sbn.packageName)
-            return
+        // ① 有取件语义才允许写码；没抠到就只当"到站通知"触发一次即时抓取
+        if (NotifyRules.hasPickupContext(text)) {
+            val code = NotifyRules.pickCode(text)
+            if (code.isNotBlank()) {
+                val r = NotifyCodeSink.persist(this, platform.id, text, code)
+                Log.i(TAG, "${platform.label} → ${r.reason}")
+                // ★ vc708：顺手触发一次即时抓取（补齐轨迹、地址、其它平台的码），5 分钟节流
+                maybeTriggerImmediateFetch(s.packageName)
+                return
+            }
+            Log.i(TAG, "${platform.label}：像取件消息但没抠到码（来源 ${s.packageName}）")
         }
-        Log.i(TAG, "从通知里抠到取件码 $code（来源 ${sbn.packageName}）")
-        // ★ vc692：先把码写进取件码缓存（用户要求），再照旧弹通知
-        persistCode(text, code)
-        TrackNotifier.notifyUpdate(this, "ntf:$code", "", "通知里的取件码 $code")
-        // ★★ vc708：**即时发布** —— 码已经进缓存了，立刻推一次小组件/流体云，
-        //   不必等下一轮后台抓取（notifyNew=false：上面那条通知已经提醒过用户，别重复打扰）。
-        try {
-            PickupPublish.publish(this, notifyNew = false)
-        } catch (t: Throwable) {
-            SafeRun.w(TAG, t)
+
+        // ② 弱信号也值得抓一轮：到站 / 派件类通知常不带码，码由接口给
+        if (NotifyRules.looksLikeExpress(text, platform)) {
+            maybeTriggerImmediateFetch(s.packageName)
         }
-        // ★ vc708：顺手触发一次即时抓取（补齐轨迹、地址、其它平台的码），5 分钟节流。
-        maybeTriggerImmediateFetch(sbn.packageName)
     }
 
     /**
-     * ★★ vc708：**事件驱动即时抓取**。
-     *
-     * 为什么需要：后台轮询走 WorkManager 周期任务，周期下限 15 分钟、系统还会再延后，
-     * 所以"快递刚到"最长要等一轮才推（同志的实测感受就是"有延迟"）。
-     * 而快递类通知**到得比轮询准**：到站 / 派件 / 取件码这些通知一来，我们就知道该查了。
-     * 于是把通知当成触发器：立刻投一次一次性抓取（[TrackScheduler.runNow]）→
-     * 抓到码后 [PickupPublish] 立刻推小组件 / 流体云 / 通知。
-     *
-     * 5 分钟节流：同一波通知（可能连发好几条）只触发一次，避免把接口打爆。
+     * ★★ vc708：**事件驱动即时抓取**（5 分钟节流）。
+     * 快递类通知到得比 WorkManager 周期准，把它当触发器立刻跑一次 [TrackScheduler.runNow]。
      */
     private fun maybeTriggerImmediateFetch(pkg: String) {
         try {
@@ -111,92 +106,23 @@ class IdNotifyListener : NotificationListenerService() {
         }
     }
 
-    /**
-     * ★ vc693：实例侧只转发 —— 真正的规则在 [persistCodeFrom]（companion 里），
-     * 这样自检 / 模拟通知也能在任意 Context 下走**完全同一条**链。
-     */
-    private fun persistCode(text: String, code: String) {
-        val r = persistCodeFrom(this, text, code)
-        if (r.isNotEmpty()) Log.i(TAG, r)
-    }
     companion object {
-        /**
-         * ★ vc693：**通知取件码的写入规则**（从实例方法提出来，便于自检与「模拟通知」复用）。
-         *
-         * 与接口来源的冲突规则（用户指定）：
-         *   ① **一致则丢弃**：任何来源已经有同一个码 ⇒ 不重复写、不建第二张卡；
-         *   ② **不一致按规则**：能认出同一单号但码不同 ⇒ 接口是权威来源，保留接口码；
-         *   ③ 其余 ⇒ 写入，来源标记 `ntf`（取件码栏显示「通知」标签）。
-         *
-         * @return 一句人话结论（自检/日志用）；调用方不需要时可忽略。
-         */
-        fun persistCodeFrom(ctx: Context, text: String, code: String): String {
-            if (code.isBlank()) return "没抠到取件码"
-            return try {
-                val all = PddCodeStore.all(ctx)
-                if (all.values.any { it.code == code }) {
-                    return "通知码 $code 已存在（与接口来源一致）⇒ 丢弃，不重复写入"
-                }
-                val wb = waybillOf(text)
-                if (wb.isNotEmpty()) {
-                    val clash = all.values.firstOrNull {
-                        it.waybill.isNotBlank() && it.waybill == wb && it.code != code
-                    }
-                    if (clash != null) {
-                        return "通知码 $code 与接口码 ${clash.code}（单号 $wb）不一致 ⇒ 按接口优先保留"
-                    }
-                }
-                val st = stationOf(text)
-                PddCodeStore.put(ctx, "ntf:$code", PddCodeStore.Cached(
-                    src = "ntf",
-                    code = code,
-                    station = st,
-                    waybill = wb,
-                    latest = text.trim().take(80),
-                    ts = System.currentTimeMillis()
-                ))
-                "通知码 $code 已写入取件码缓存（站=$st 单号=$wb）"
-            } catch (t: Throwable) {
-                "写入通知取件码失败: ${t.message}"
-            }
-        }
-
-        /** 从通知文本里尽力认出运单号（取件码通知常写整号或「尾号XXXX」） */
-        fun waybillOf(text: String): String {
-            val m = Regex("(?:运单号|快递单号|单号|尾号)[是为：:\\s]*([0-9A-Za-z]{4,})").find(text)
-            return m?.groupValues?.get(1)?.trim().orEmpty()
-        }
-
-        /** 从通知文本里尽力认出驿站 / 快递柜名（认不出返回空串） */
-        fun stationOf(text: String): String {
-            val m = Regex("([\\u4e00-\\u9fa5A-Za-z0-9]{2,18}(?:驿站|快递柜|代收点|自提点|服务点|便利店))").find(text)
-            return m?.groupValues?.get(1)?.trim()?.take(60).orEmpty()
-        }
         private const val TAG = "IdNotifyListener"
 
-        /** 快递消息关键词闸（照 express-pickup 的思路） */
-        private val HINTS = listOf(
-            "取件", "取货", "提货", "快递", "速递", "包裹", "驿站", "快递柜",
-            "丰巢", "速递易", "菜鸟", "派件", "签收", "代收点", "快件", "送达", "柜"
-        )
+        // ---- 兼容旧调用点（自检页「模拟一条取件码通知」、旧 debug 入口）----
+        // 真正的规则在 NotifyRules、写入在 NotifyCodeSink；这里只转发，避免两处各判一遍。
+        fun looksLikeExpress(text: String): Boolean = NotifyRules.looksLikeExpress(text)
+        fun pickCode(text: String): String = NotifyRules.pickCode(text)
+        fun waybillOf(text: String): String = NotifyRules.waybillOf(text)
+        fun stationOf(text: String): String = NotifyRules.stationOf(text)
 
-        /** 取件码正则：优先认"取件码X"这种明写，其次认驿站附近的横杠格口码 */
-        private val P_CODE = Pattern.compile(
-            "(?:取件码|取货码|提货码|提取码|凭码|取件口令|取件密码)[是为：:\\s]*([0-9A-Za-z]{1,6}(?:-[0-9A-Za-z]{1,6}){0,3})"
-        )
-        private val P_NEAR = Pattern.compile(
-            "([0-9A-Za-z]{1,6}(?:-[0-9A-Za-z]{1,6}){1,3})(?=[^0-9A-Za-z]{0,8}(?:取件|驿站|柜|代收点|自提))"
-        )
-
-        fun looksLikeExpress(text: String): Boolean = HINTS.any { text.contains(it) }
-
-        fun pickCode(text: String): String {
-            var m = P_CODE.matcher(text)
-            if (m.find()) return m.group(1)?.trim().orEmpty()
-            m = P_NEAR.matcher(text)
-            if (m.find()) return m.group(1)?.trim().orEmpty()
-            return ""
-        }
+        /** 自检 / 模拟通知：默认按拼多多样例平台写入，仍走 [NotifyCodeSink] 全部门禁 */
+        fun persistCodeFrom(
+            ctx: Context,
+            text: String,
+            code: String,
+            platformId: String = "pdd",
+        ): String = NotifyCodeSink.persist(ctx, platformId, text, code).reason
 
         private fun appendText(sb: StringBuilder, cs: CharSequence?) {
             if (!cs.isNullOrEmpty()) sb.append(cs).append(' ')
