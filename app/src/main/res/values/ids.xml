@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- P2 跟手光：View.setTag(key, drawable) 用的稳定 key，不占用默认 tag -->
+    <item name="follow_glow" type="id"/>
+</resources>

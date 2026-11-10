@@ -299,9 +299,28 @@ class MainActivity : Activity() {
         transitEnterMs = System.currentTimeMillis()
         val layer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(cBg)
+            // ★ v2 马卡龙：页面底铺环境光（四角柔光），白卡浮在上面才"有光可透"
+            background = AmbientGlowDrawable(isDark())
         }
-        val top = makeTopBar(getString(R.string.bar_transit_title), accent = ACCENT_HEX)
+        // ★ v2 .bar：26px 大标题 + 12px 副行；顶栏透明（无大白边）
+        val top = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding((22 * dp).toInt(), (6 * dp).toInt(), (18 * dp).toInt(), (10 * dp).toInt())
+        }
+        top.addView(TextView(this).apply {
+            text = getString(R.string.bar_transit_title)
+            textSize = UiTok.T26
+            typeface = tfMedium
+            letterSpacing = -0.015f
+            setTextColor(cTextPrimary)
+        })
+        top.addView(TextView(this).apply {
+            text = "按平台分开加载 · 下拉可刷新"
+            textSize = UiTok.T12
+            setTextColor(cTextSecondary)
+        }, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = (4 * dp).toInt() })
         // ★ vc264n（同志 04:16 要求）：删掉右上角刷新键 —— 手动刷新走**下拉手势**
         //   （vc264m 加的 SwipeRefreshLayout，同一入口 fetchInTransit(force=true)）
         attachTopBar(layer, top)
@@ -319,17 +338,32 @@ class MainActivity : Activity() {
         // ★ vc697：平台标签条 —— 在途快递按平台分开加载，左右滑动切换
         val tabScroll = android.widget.HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
+            // ★ 四等分必须让子 LinearLayout 真正铺满视口，否则 weight 不生效
+            isFillViewport = true
         }
-        val tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val tabRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            // ★ v2 .seg：薰衣草胶囊容器，四等分，选中项白底
+            background = sq(UiTok.R999, UiTok.segBg(isDark()))
+            setPadding((3 * dp).toInt(), (3 * dp).toInt(), (3 * dp).toInt(), (3 * dp).toInt())
+        }
         tabScroll.addView(tabRow, ViewGroup.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         layer.addView(tabScroll, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { topMargin = (2 * dp).toInt(); bottomMargin = (4 * dp).toInt() })
+        ).apply {
+            leftMargin = (4 * dp).toInt(); rightMargin = (4 * dp).toInt()
+            topMargin = (2 * dp).toInt(); bottomMargin = (14 * dp).toInt()
+        })
         transitTabRow = tabRow
         transitTabsScroll = tabScroll
 
         val scroll = ScrollView(this)
+        // ★ P2 渐进遮罩：滚动内容在顶栏下 28dp 内淡出，观感等价 COUI 的渐进模糊边界；
+        //   foreground 画在内容之上但不占布局，也不会产生"顶部大白边"。
+        runCatching {
+            scroll.foreground = ProgressiveFadeDrawable(cBg, fromTop = true, fadePx = 28f * dp)
+        }
         val list = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             // ★ vc233：左右 16dp → 10dp。卡片两侧原本各空出 47px，同志嫌"卡片太细"，
@@ -2901,8 +2935,15 @@ class MainActivity : Activity() {
     // 旧 Linear 色板（靛紫 #5e6ad2 + 近黑画布）已整体退役，别再往回改。
     private val cBg: Int
         get() = UiTok.pageBg(isDark())
+    /** 卡片填充顶部（v2 半融入：92% 白） */
+    private val cCardTop: Int
+        get() = UiTok.cardBgTop(isDark())
+    /** 卡片填充底部（v2 半融入：84% 白，环境光透出来） */
+    private val cCardBottom: Int
+        get() = UiTok.cardBgBottom(isDark())
+    /** 兼容：需要单一色值时给顶部色 */
     private val cCard: Int
-        get() = UiTok.cardBg(isDark())
+        get() = cCardTop
 
     /** 面板层（顶栏 / 抽屉底）：夜景 #1E1E1E，比页面纯黑亮一档 */
     private val cPanel: Int
@@ -2950,6 +2991,36 @@ class MainActivity : Activity() {
         radiusDp * dp, fill, fillBottom, stroke, strokeDp * dp, contour
     )
 
+    /**
+     * ★ v2 软阴影：框架 elevation + 超椭圆 outline —— 投影画在 view 边界外，不会被自身裁掉。
+     * 昼 6dp（v2 box-shadow 0 8px 26px -18px 的观感）、夜 2dp（纯黑上投影几乎看不见，少用）。
+     * 阴影色走 [UiTok.cardShadow]（昼偏蓝的墨色 rgba(15,26,44,.42)，不是纯黑）。
+     */
+    private fun cardElevation(v: android.view.View, radiusDp: Int) {
+        val dark = isDark()
+        val r = radiusDp * dp
+        v.outlineProvider = object : android.view.ViewOutlineProvider() {
+            override fun getOutline(view: android.view.View, o: android.graphics.Outline) {
+                val w = view.width.toFloat()
+                val h = view.height.toFloat()
+                if (w <= 0f || h <= 0f) return
+                val p = android.graphics.Path()
+                SquirclePath.build(p, w, h, r)
+                try {
+                    o.setPath(p)
+                    o.alpha = 1f
+                } catch (_: Throwable) {
+                    o.setRoundRect(0, 0, w.toInt(), h.toInt(), r)
+                }
+            }
+        }
+        v.elevation = if (dark) 2f * dp else 6f * dp
+        if (android.os.Build.VERSION.SDK_INT >= 28) {
+            v.outlineAmbientShadowColor = UiTok.cardShadow(dark)
+            v.outlineSpotShadowColor = UiTok.cardShadow(dark)
+        }
+    }
+
     /** 主按钮的凝光蓝底：上浅下深 + 顶部亮线（昼 #2E9BFF→#0080FF / 夜 #3D9DFF→#1478E0） */
     private fun ctasBg(radiusDp: Int = UiTok.R999): SquircleDrawable = sq(
         radiusDp, UiTok.accentTop(isDark()), UiTok.accentBottom(isDark()), contour = true
@@ -2962,6 +3033,8 @@ class MainActivity : Activity() {
     private fun linearCard(radius: Int = UiTok.R20): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         background = linearCardBg(radius)
+        // ★ v2 软阴影：把卡从环境光上"托"起来 —— 白卡全白不可见的问题就靠这一步 + 环境光
+        cardElevation(this, radius)
     }
 
     /**
@@ -2971,7 +3044,8 @@ class MainActivity : Activity() {
      * ★ 名字刻意不叫 `cardBg` —— `makeIdentityCard` 里有同名局部变量，会自己遮蔽自己。
      */
     private fun linearCardBg(radius: Int = UiTok.R20): android.graphics.drawable.Drawable =
-        sq(radius, cCard, stroke = cBorder, strokeDp = 0.6f, contour = isDark())
+        // ★ v2「半融入」：顶 92% 白 → 底 84% 白，环境光从卡后透出来，卡片不再死白突兀
+        sq(radius, cCardTop, cCardBottom, stroke = cBorder, strokeDp = 0.6f, contour = isDark())
 
     /**
      * 卡片按下微缩（Linear 不用涟漪，用极短的缩放反馈）。
@@ -2986,25 +3060,41 @@ class MainActivity : Activity() {
      */
     private fun applyPress(vararg views: android.view.View) {
         val slop = android.view.ViewConfiguration.get(this).scaledTouchSlop
+        val spring = android.view.animation.OvershootInterpolator(1.1f)
         for (v in views) {
             var downX = 0f
             var downY = 0f
+            var swiped = false
             v.setOnTouchListener { view, e ->
                 when (e.actionMasked) {
                     android.view.MotionEvent.ACTION_DOWN -> {
                         downX = e.rawX
                         downY = e.rawY
+                        swiped = false
                         view.animate().scaleX(0.98f).scaleY(0.98f).setDuration(UiTok.D100).start()
+                        // ★ P2 跟手光：按下即起光，中心=触点（不改既有 listener 链）
+                        val (lx, ly) = FollowGlow.local(view, e)
+                        FollowGlow.down(view, lx, ly, UiTok.R20.toFloat(), isDark())
                     }
-                    android.view.MotionEvent.ACTION_MOVE ->
+                    android.view.MotionEvent.ACTION_MOVE -> {
                         if (kotlin.math.abs(e.rawX - downX) > slop ||
                             kotlin.math.abs(e.rawY - downY) > slop
                         ) {
+                            swiped = true
                             view.animate().scaleX(1f).scaleY(1f).setDuration(UiTok.D100).start()
+                            FollowGlow.up(view)
+                        } else if (!swiped) {
+                            val (lx, ly) = FollowGlow.local(view, e)
+                            FollowGlow.move(view, lx, ly)
                         }
+                    }
                     android.view.MotionEvent.ACTION_UP,
-                    android.view.MotionEvent.ACTION_CANCEL ->
-                        view.animate().scaleX(1f).scaleY(1f).setDuration(UiTok.D100).start()
+                    android.view.MotionEvent.ACTION_CANCEL -> {
+                        // ★ P2 动效回弹：松手用轻 overshoot 弹回，不是硬切回 1f
+                        view.animate().scaleX(1f).scaleY(1f)
+                            .setDuration(UiTok.D240).setInterpolator(spring).start()
+                        FollowGlow.up(view)
+                    }
                 }
                 false
             }
@@ -3583,7 +3673,7 @@ class MainActivity : Activity() {
         // ★ 根容器必须自己刷画布色：主题是 `Theme.Material.Light`，windowBackground 是近白 #FAFAFA，
         //   而 Android 12+ 的 ScrollView 边缘拉伸（overscroll stretch）会在边界处露出底层背景
         //   ⇒ 不刷的话，在深色首页顶部/底部一拉就是一道白边。
-        root.setBackgroundColor(cBg)
+        root.background = AmbientGlowDrawable(isDark())
         // ★ vc582：测试物流要先加载，首页「在途快递」那行才能显示件数
         //   （原来 loadTestTransit 在 buildHome 之后，首页永远显示 0 件）
         testTransit.clear()
@@ -4854,20 +4944,34 @@ class MainActivity : Activity() {
      * 夜间额外画顶部轮廓光 —— 纯黑底上全靠这道光把卡片的边"提"起来。
      */
     private fun homeCardBg(radiusDp: Int = UiTok.R20): android.graphics.drawable.Drawable =
-        sq(radiusDp, cCard, stroke = cBorder, strokeDp = 0.6f, contour = isDark())
+        sq(radiusDp, cCardTop, cCardBottom, stroke = cBorder, strokeDp = 0.6f, contour = isDark())
 
-    /** 36dp 品牌方块：品牌色 10%(亮)/15%(暗) 淡底 + 品牌色文字 —— 不再整块铺色 */
+    /**
+     * 36dp 身份方块 —— ★ v2 马卡龙：淘=樱 / 拼=薰 / 菜=薄（首页与 dock 同一套），
+     * 途/云 = 天青 / 薄荷绿；字母用墨色（v2 .id .ch = ink），身份靠**底色**区分。
+     */
     private fun brandTile(badge: String, colorHex: String): TextView {
-        val c = Color.parseColor(colorHex)
+        val tileBg: Int
+        val tileText: Int
+        when (badge) {
+            "淘" -> { tileBg = UiTok.macRose(isDark()); tileText = cTextPrimary }
+            "拼" -> { tileBg = UiTok.macLilac(isDark()); tileText = cTextPrimary }
+            "菜" -> { tileBg = UiTok.macMint(isDark()); tileText = cTextPrimary }
+            "途" -> { tileBg = UiTok.iconBlueBg(isDark()); tileText = cAccent }
+            "云" -> { tileBg = UiTok.iconGreenBg(isDark()); tileText = UiTok.iconGreenText(isDark()) }
+            else -> {
+                val c = Color.parseColor(colorHex)
+                tileBg = UiTok.brandWithAlpha(c, UiTok.brandTileAlpha(isDark()))
+                tileText = c
+            }
+        }
         return TextView(this).apply {
             text = badge
-            textSize = UiTok.T15
+            textSize = UiTok.T19
             typeface = tfMedium
             gravity = Gravity.CENTER
-            setTextColor(c)
-            background = sq(
-                UiTok.R10, UiTok.brandWithAlpha(c, UiTok.brandTileAlpha(isDark()))
-            )
+            setTextColor(tileText)
+            background = sq(UiTok.R14, tileBg)
         }
     }
 
@@ -4893,7 +4997,9 @@ class MainActivity : Activity() {
         ))
         row.addView(TextView(this).apply {
             text = title
-            textSize = UiTok.T15
+            // ★ v2 统一：行卡主标题 16px Medium（.rowcard .k .t）
+            textSize = UiTok.T16
+            typeface = tfMedium
             setTextColor(cTextPrimary)
             maxLines = 1
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
@@ -4928,7 +5034,8 @@ class MainActivity : Activity() {
     private fun buildHome(): LinearLayout {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(cBg)
+            // ★ v2 马卡龙：首页底铺环境光
+            background = AmbientGlowDrawable(isDark())
             // ★★ vc674：**初始内边距就要带上状态栏高度**。
             //   以前只靠 setOnApplyWindowInsetsListener 补 top，而首页是动态 addView 的，
             //   重建时（标记已取件 → rebuildHome）**不会重新分发一次 inset** ⇒ top=0
@@ -4948,14 +5055,27 @@ class MainActivity : Activity() {
             }
         }
 
-        // ---------- 顶栏：标题 24sp（设置键仍是右下悬浮钮，按同志要求不再改） ----------
+        // ---------- 顶栏（v2 .bar）：26px 大标题 + 12px 副行；齿轮在右上角 36dp ----------
         box.addView(TextView(this).apply {
             text = getString(R.string.app_name)
-            textSize = UiTok.T24
+            textSize = UiTok.T26
             typeface = tfMedium
+            letterSpacing = -0.015f
             setTextColor(cTextPrimary)
             maxLines = 1
         })
+        box.addView(TextView(this).apply {
+            val stamp = try {
+                java.text.SimpleDateFormat("M月d日 E · HH:mm", java.util.Locale.CHINA)
+                    .format(java.util.Date())
+            } catch (_: Throwable) { "" }
+            text = if (stamp.isEmpty()) "刚抓取" else "$stamp 刚抓取"
+            textSize = UiTok.T12
+            setTextColor(cTextSecondary)
+            letterSpacing = 0.01f
+        }, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = (4 * dp).toInt() })
 
         box.addView(makeSpacer(UiTok.S16))
 
@@ -5007,10 +5127,13 @@ class MainActivity : Activity() {
             isFocusable = true
             setOnClickListener { openPickup("all") }
         }
-        // ★ v1.4.19（凝光）：「取件码」三个字做成胶囊 chip —— 强调色 10% 底 + 强调色字。
-        //   系统里所有"标签"都是这个形制：底色是强调色的淡版，字是强调色本身，圆角全胶囊。
-        primary.addView(TextView(this).apply {
-            text = getString(R.string.bar_pickup)
+        // ★ v2 hero 顶行：左「待取」胶囊 + 右「驿站」印章（.chip / .stamp）
+        val heroTop = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        heroTop.addView(TextView(this).apply {
+            text = "待取"
             textSize = UiTok.T12
             typeface = tfMedium
             setTextColor(cAccent)
@@ -5019,8 +5142,17 @@ class MainActivity : Activity() {
                 (UiTok.S12 * dp).toInt(), (UiTok.S4 * dp).toInt(),
                 (UiTok.S12 * dp).toInt(), (UiTok.S4 * dp).toInt()
             )
-        }, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        })
+        heroTop.addView(TextView(this).apply {
+            text = feedRows.firstOrNull()?.second?.take(10) ?: "驿站待取"
+            textSize = UiTok.T115
+            setTextColor(cTextTertiary)
+            letterSpacing = 0.01f
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+            leftMargin = (UiTok.S8 * dp).toInt()
+        })
+        primary.addView(heroTop, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ))
         // ★★ v1.4.19（凝光）：待取件数从"3 件待取"一句话改成**大数字 + 小单位**。
         //   凝光只允许两处大字：这里是 56sp 的数字，取件码页是 41sp 的等宽码；除此之外没有第三处。
@@ -5032,13 +5164,14 @@ class MainActivity : Activity() {
         }
         countRow.addView(TextView(this).apply {
             text = pkgCount.toString()
-            textSize = UiTok.T56
+            textSize = UiTok.T68          // ★ v2 .count .n = 68px
             typeface = tfMedium
             setTextColor(cTextPrimary)
-            // ★ 别关 includeFontPadding：关了之后 56sp 的"1"上下会被裁掉一截（真机实测）
+            fontFeatureSettings = "tnum"
+            // ★ 别关 includeFontPadding：关了大数字上下会被裁掉一截（真机实测）
         })
         countRow.addView(TextView(this).apply {
-            text = " 件待取"
+            text = " 件"
             textSize = UiTok.T15
             setTextColor(cTextSecondary)
         }, LinearLayout.LayoutParams(
@@ -5047,83 +5180,95 @@ class MainActivity : Activity() {
         primary.addView(countRow, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = (UiTok.S8 * dp).toInt() })
-        primary.addView(TextView(this).apply {
-            // ★★ v1.4.11（同志 12:54）：取件后首页与取件码页**同步撤掉**，
-            //   所以这里不再出现"另有 N 个已取件"这类残留说明。
-            text = when {
-                pkgCount == 0 -> "暂无待取件 · 点开查看全部"
-                pkgTime != null -> "更新于 $pkgTime"
-                else -> "下拉取件码页可刷新"
-            }
-            textSize = UiTok.T13
-            setTextColor(cTextTertiary)
-            maxLines = 1
+        // ★ v2 .rule：计数与取件码之间一条极淡分割线
+        primary.addView(View(this).apply {
+            background = android.graphics.drawable.ColorDrawable(cDivider)
         }, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { topMargin = (UiTok.S4 * dp).toInt() })
+            ViewGroup.LayoutParams.MATCH_PARENT, maxOf(1, (UiTok.HAIR * dp).toInt())
+        ).apply { topMargin = (UiTok.S16 * dp).toInt() })
 
-        // ★ 2×2 网格：最多 4 条，不缩字号（码 15sp / 驿站 12sp）；两排时卡片自然长高
+        // ★ v2 .codeblk：主码 41px 等宽（唯一大字之一）+ 绿点驿站行
         if (feedRows.isNotEmpty()) {
-            val shown = feedRows.take(4)
-            // ★ vc574：只画**需要的行**；不足 4 条时空位不画底色（首版留了半截灰块，像被截断）
-            val rowsN = (shown.size + 1) / 2
-            for (r in 0 until rowsN) {
-                val row = LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                }
-                // ★ vc578：本行实际有几个格子 —— 只剩 1 条时**拉满整行**（不再留半格空白）
-                val cellsInRow = minOf(2, shown.size - r * 2)
-                for (c in 0 until cellsInRow) {
-                    val idx = r * 2 + c
-                    val cell = LinearLayout(this).apply {
-                        orientation = LinearLayout.VERTICAL
-                        if (idx < shown.size) background = sq(
-                            UiTok.R14, if (isDark()) 0x1AFFFFFF else 0x0A000000
-                        )
-                        setPadding((UiTok.S12 * dp).toInt(), (UiTok.S8 * dp).toInt(),
-                                   (UiTok.S12 * dp).toInt(), (UiTok.S8 * dp).toInt())
-                        if (idx < shown.size) {
-                            val it0 = shown[idx]
-                            addView(TextView(this@MainActivity).apply {
-                                // v1.4.19：15sp → 20sp。取件码要能"逐位核对"，太小就得凑近看
-                                text = it0.first
-                                textSize = UiTok.T20
-                                typeface = tfMedium
-                                setTextColor(cTextPrimary)
-                                maxLines = 1
-                                ellipsize = android.text.TextUtils.TruncateAt.END
-                            })
-                            addView(TextView(this@MainActivity).apply {
-                                text = it0.second
-                                textSize = UiTok.T12
-                                setTextColor(cTextTertiary)
-                                maxLines = 1
-                                ellipsize = android.text.TextUtils.TruncateAt.END
-                            }, LinearLayout.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-                            ).apply { topMargin = (UiTok.S4 * dp).toInt() })
-                        }
-                    }
-                    row.addView(cell, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                        if (c == 0) rightMargin = (UiTok.S8 * dp).toInt()
-                    })
-                }
-                primary.addView(row, LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = (UiTok.S12 * dp).toInt() })
-            }
-        }
-
-        // ★ 同志补充：≥5 条时网格只放得下 4 个，必须把“还有几件”提示出来
-        if (feedRows.size > 4) {
-            val rest = feedRows.size - 4
             primary.addView(TextView(this).apply {
-                text = "还有 $rest 件未显示 · 点「查看全部」查看"
-                textSize = UiTok.T13
+                text = "取件码"
+                textSize = UiTok.T12
                 setTextColor(cTextTertiary)
-                maxLines = 1
+                letterSpacing = 0.03f
             }, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (UiTok.S16 * dp).toInt() })
+            primary.addView(TextView(this).apply {
+                text = feedRows.first().first
+                textSize = UiTok.T41
+                typeface = tfMedium
+                fontFeatureSettings = "tnum"
+                setTextColor(cTextPrimary)
+                letterSpacing = -0.005f
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            })
+            primary.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(View(this@MainActivity).apply {
+                    background = sq(UiTok.R999, UiTok.greenDot(isDark()))
+                }, LinearLayout.LayoutParams((6 * dp).toInt(), (6 * dp).toInt()))
+                addView(TextView(this@MainActivity).apply {
+                    text = feedRows.first().second
+                    textSize = UiTok.T13
+                    setTextColor(cTextSecondary)
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                }, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { leftMargin = (7 * dp).toInt() })
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (UiTok.S8 * dp).toInt() })
+        }
+
+        // ★ v2：主卡不再重复「更新于 xx:xx」（顶栏副行已有"刚抓取"、印章已有驿站），
+        //   0 件时才给一句占位，避免空卡。
+        if (pkgCount == 0) {
+            primary.addView(TextView(this).apply {
+                text = "暂无待取件 · 点开查看全部"
+                textSize = UiTok.T13
+                setTextColor(cTextTertiary)
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (UiTok.S4 * dp).toInt() })
+        }
+
+        // ★ v2 压缩：主码已 41px 独占一行，其余码只做**一行次要信息**，不再铺 2×2 网格。
+        //   旧网格会把同一个码再画一遍（主卡 41px + 网格 15sp），且把首页撑过一屏导致
+        //   底部身份码卡被裁 —— 这里改成「其余 N 件」的单行胶囊，高度从 ~120dp 降到 ~26dp。
+        if (feedRows.size > 1) {
+            val moreRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val rest = feedRows.drop(1)
+            moreRow.addView(TextView(this).apply {
+                text = "其余 ${rest.size} 件"
+                textSize = UiTok.T115
+                setTextColor(cTextTertiary)
+            })
+            for (c in rest.take(3)) {
+                moreRow.addView(TextView(this).apply {
+                    text = c.first
+                    textSize = UiTok.T115
+                    typeface = tfMedium
+                    fontFeatureSettings = "tnum"
+                    setTextColor(cTextSecondary)
+                    background = sq(UiTok.R999, UiTok.gtagBg(isDark()))
+                    setPadding((8 * dp).toInt(), (3 * dp).toInt(), (8 * dp).toInt(), (3 * dp).toInt())
+                    maxLines = 1
+                }, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { leftMargin = (6 * dp).toInt() })
+            }
+            primary.addView(moreRow, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { topMargin = (UiTok.S12 * dp).toInt() })
         }
 
@@ -5140,80 +5285,166 @@ class MainActivity : Activity() {
             isClickable = true
             setOnClickListener { openPickup("all") }
         }
-        primary.addView(goBtn, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, (UiTok.S48Dp * dp).toInt()
+        // ★ v2 .herofoot：主按钮 + 一个纯文字按钮（ghost），胶囊高 40dp
+        val heroFoot = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        heroFoot.addView(goBtn, LinearLayout.LayoutParams(
+            0, (UiTok.S40Dp * dp).toInt(), 1f
+        ))
+        heroFoot.addView(TextView(this).apply {
+            text = "标记已取件"
+            textSize = UiTok.T15
+            gravity = Gravity.CENTER
+            setTextColor(cTextSecondary)
+            isClickable = true
+            setOnClickListener { openPickup("all") }
+        }, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, (UiTok.S40Dp * dp).toInt()
+        ).apply { leftMargin = (UiTok.S16 * dp).toInt() })
+        primary.addView(heroFoot, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = (UiTok.S16 * dp).toInt() })
         applyPress(primary)
         box.addView(primary)
 
         box.addView(makeSpacer(UiTok.S12))
 
-        // ---------- 在途快递（独立一行卡） ----------
+        // ---------- 「在途」分组（v2 .sect-t 在卡外） ----------
         val transitCount = pddTransit.size + jdTransit.size + miTransit.size +
                 tbTransit.size + manualTransit.size + testTransit.size
-        val transitStatus = if (transitCount > 0) "$transitCount 件在途" else ""
+        box.addView(homeSectionLabel("在途"), LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = (UiTok.S16 * dp).toInt(); bottomMargin = (UiTok.S8 * dp).toInt() })
+
+        // ★ v2 .rowcard：41dp 图标 + 标题/摘要两行 + 右侧 19px 数字 + 「件 ›」
         val transitCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
             background = homeCardBg()
-            // ★ vc601：浅色下卡片需要一层极淡投影，否则白卡和 #F7F8F8 只差一点点
+            setPadding((13 * dp).toInt(), (13 * dp).toInt(), (17 * dp).toInt(), (13 * dp).toInt())
+            minimumHeight = (64 * dp).toInt()
             if (!isDark()) elevation = 1.5f * dp
+            isClickable = true
+            setOnClickListener { openInTransit() }
         }
-        transitCard.addView(
-            homeRow("途", ACCENT_HEX, getString(R.string.bar_transit_title), transitStatus) {
-                openInTransit()
-            },
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, (UiTok.ROW_H * dp).toInt()
-            )
-        )
+        transitCard.addView(TextView(this).apply {
+            text = "途"
+            textSize = UiTok.T15
+            typeface = tfMedium
+            gravity = Gravity.CENTER
+            setTextColor(cAccent)
+            background = sq(UiTok.R14, UiTok.iconBlueBg(isDark()))
+        }, LinearLayout.LayoutParams((41 * dp).toInt(), (41 * dp).toInt()))
+        val transitTextBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        transitTextBox.addView(TextView(this).apply {
+            text = getString(R.string.bar_transit_title)
+            textSize = UiTok.T16
+            typeface = tfMedium
+            setTextColor(cTextPrimary)
+        })
+        transitTextBox.addView(TextView(this).apply {
+            text = if (transitCount > 0) "运输中的包裹 · 点击查看全部轨迹"
+                   else "暂无在途 · 下拉取件码页可刷新"
+            textSize = UiTok.T125
+            setTextColor(cTextSecondary)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = (4 * dp).toInt() })
+        transitCard.addView(transitTextBox, LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+        ).apply { leftMargin = (13 * dp).toInt() })
+        transitCard.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(TextView(this@MainActivity).apply {
+                text = transitCount.toString()
+                textSize = UiTok.T19
+                typeface = tfMedium
+                fontFeatureSettings = "tnum"
+                setTextColor(cTextPrimary)
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "件"
+                textSize = UiTok.T14
+                setTextColor(cTextSecondary)
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { leftMargin = (2 * dp).toInt() })
+            addView(TextView(this@MainActivity).apply {
+                text = "›"
+                textSize = UiTok.T15
+                setTextColor(cTextFaint)
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { leftMargin = (6 * dp).toInt() })
+        })
+        applyPress(transitCard)
         box.addView(transitCard)
 
-        box.addView(makeSpacer(UiTok.S24))
+        box.addView(makeSpacer(UiTok.S16))
 
-        // ---------- 身份码：分组标题 + 一张卡装 3 行 ----------
-        box.addView(homeSectionLabel("身份码"))
-        box.addView(makeSpacer(UiTok.S8))
+        // ---------- 身份码：分组标题（卡外）+ 横排三格 ----------
+        box.addView(homeSectionLabel("身份码"), LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = (UiTok.S8 * dp).toInt() })
 
-        val pddIn = PddChannel.isLoggedIn(this)
+        // ★ v2 .ids：一张卡内横排三格，每格 = 马卡龙色块 + 11.5px 标签
         val idCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+            orientation = LinearLayout.HORIZONTAL
             background = homeCardBg()
+            setPadding((11 * dp).toInt(), (11 * dp).toInt(), (11 * dp).toInt(), (11 * dp).toInt())
             if (!isDark()) elevation = 1.5f * dp
         }
-        val rowLp = { ->
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, (UiTok.ROW_H * dp).toInt()
-            )
-        }
-        val dividerLp = { ->
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, maxOf(1, (UiTok.HAIR * dp).toInt())
-            ).apply {
-                leftMargin = ((UiTok.S16 + UiTok.BRAND_TILE + UiTok.S12) * dp).toInt()
-                rightMargin = (UiTok.S16 * dp).toInt()
+        fun idTile(ch: String, label: String, bg: Int, action: () -> Unit): View =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_HORIZONTAL
+                setPadding((8 * dp).toInt(), (12 * dp).toInt(), (8 * dp).toInt(), (10 * dp).toInt())
+                background = sq(UiTok.R14, bg)
+                addView(TextView(this@MainActivity).apply {
+                    text = ch
+                    textSize = UiTok.T19
+                    typeface = tfMedium
+                    gravity = Gravity.CENTER
+                    includeFontPadding = false
+                    setTextColor(cTextPrimary)
+                }, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, (28 * dp).toInt()
+                ))
+                addView(TextView(this@MainActivity).apply {
+                    text = label
+                    textSize = UiTok.T115
+                    setTextColor(cTextTertiary)
+                    letterSpacing = 0.02f
+                }, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = (6 * dp).toInt() })
+                isClickable = true
+                setOnClickListener { action() }
+                applyPress(this)
             }
-        }
-        // 淘宝身份码
-        idCard.addView(homeRow("淘", "#FF5000", getString(R.string.bar_taobao), "") {
-            if (getSharedPreferences(PREFS, MODE_PRIVATE)
-                    .getBoolean("tb_id_autojump", false)
-            ) openTaobaoIdentity() else {
-                openWeb(TAOBAO_URL, getString(R.string.web_title), accent = "#FF5000")
-            }
-        }, rowLp())
-        idCard.addView(homeDivider(), dividerLp())
-        // 拼多多身份码（未登录直接去登录，保持一次点击）
-        idCard.addView(homeRow(
-            "拼", "#E02E24", getString(R.string.bar_pdd_code),
-            if (pddIn) "" else "未登录"
-        ) {
+        val tileLp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        idCard.addView(idTile("淘", getString(R.string.bar_taobao), UiTok.macRose(isDark())) {
+            if (getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean("tb_id_autojump", false))
+                openTaobaoIdentity()
+            else openWeb(TAOBAO_URL, getString(R.string.web_title), accent = "#FF5000")
+        }, tileLp.apply { rightMargin = (9 * dp).toInt() })
+        idCard.addView(idTile("拼", getString(R.string.bar_pdd_code), UiTok.macLilac(isDark())) {
             if (PddChannel.isLoggedIn(this)) openPddIdentity() else openPddLogin()
-        }, rowLp())
-        idCard.addView(homeDivider(), dividerLp())
-        // 菜鸟身份码
-        idCard.addView(homeRow("菜", "#0078FF", getString(R.string.bar_cainiao), "") {
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+            leftMargin = (4 * dp).toInt(); rightMargin = (4 * dp).toInt()
+        })
+        idCard.addView(idTile("菜", getString(R.string.bar_cainiao), UiTok.macMint(isDark())) {
             openWeb(TAOBAO_URL, getString(R.string.web_title_cainiao), cainiaoIdentity = true)
-        }, rowLp())
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+            leftMargin = (9 * dp).toInt()
+        })
         box.addView(idCard)
 
         return box
@@ -6135,11 +6366,17 @@ class MainActivity : Activity() {
     }
 
     private fun pickupSubtitle(): String {
+        // ★ v2 副行口径：「N 张 · 待取 M · HH:mm」—— 数字与卡片一一对应
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         val count = prefs.getInt(KEY_LAST_PKG_COUNT, -1)
         val time = prefs.getString(KEY_LAST_PKG_TIME, null)
-        return if (count >= 0 && time != null) getString(R.string.bar_pickup_sub_count, count, time)
-        else getString(R.string.bar_pickup_sub)
+        val picked = if (pickupPickedVisible > 0) pickupPickedVisible else 0
+        val total = if (count >= 0) count + picked else -1
+        return when {
+            total >= 0 && time != null -> "$total 张 · 待取 $count · $time"
+            count >= 0 && time != null -> getString(R.string.bar_pickup_sub_count, count, time)
+            else -> getString(R.string.bar_pickup_sub)
+        }
     }
 
     private fun makeSpacer(h: Int): View = View(this).apply {
@@ -6232,14 +6469,19 @@ class MainActivity : Activity() {
      * 再挂监听等真实值回来。
      */
     private fun bindTopBarInset(top: View) {
-        val hPad = (10 * dp).toInt()
         liveTopBars.removeAll { !it.isAttachedToWindow }
         liveTopBars.add(top)
-        top.setPadding(hPad, statusBarTop, hPad, 0)
+        // ★ v2：v1 版写死 10dp 左右 padding，会把调用方给大标题顶栏设的 22dp 覆盖掉
+        //   （取件码页/在途页 v2 顶栏因此左边距被压回 10dp）。改成只改 top，其余原样保留。
+        val l = top.paddingLeft
+        val r = top.paddingRight
+        val b = top.paddingBottom
+        val ownTop = top.paddingTop
+        top.setPadding(l, statusBarTop + ownTop, r, b)
         top.setOnApplyWindowInsetsListener { v, insets ->
             val t = insets.getInsets(WindowInsets.Type.statusBars()).top
             if (t > 0) statusBarTop = t
-            v.setPadding(hPad, maxOf(t, statusBarTop), hPad, 0)
+            v.setPadding(l, maxOf(t, statusBarTop) + ownTop, r, b)
             insets
         }
         top.post { if (top.isAttachedToWindow) top.requestApplyInsets() }
@@ -6289,7 +6531,8 @@ class MainActivity : Activity() {
         val top = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(cPanel)
+            // ★ v2 马卡龙：顶栏**透明** —— 环境光从底下透出来，不再压白色实底
+            //   （同志 18:36："顶部应该也是彩色的，相当于顶部没有白色的遮挡，目前每一页都是这样"）
             setPadding((10 * dp).toInt(), 0, (10 * dp).toInt(), 0)
         }
         if (leading != null) top.addView(leading)
@@ -6313,8 +6556,9 @@ class MainActivity : Activity() {
         layer.addView(top, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ))
-        layer.addView(View(this).apply { setBackgroundColor(cDivider) },
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1))
+        // ★ v2：顶栏与内容之间不加任何实色条（.bar 无 border-bottom），环境光直接贯通。
+        //   P2 的渐进遮罩挂在**滚动容器 foreground** 上（见 openInTransit / openPickup），
+        //   不占布局高度、不会在顶栏下沿制造白边。
         bindTopBarInset(top)
     }
 
@@ -10654,6 +10898,8 @@ class MainActivity : Activity() {
     private var pickupPickedVisible: Int = -1
     /** 顶栏按钮的刷新回调（renderMerged 渲染完调一次） */
     private var pickupClearBtnRefresh: (() -> Unit)? = null
+    /** v2 顶栏副行（N 张 · 待取 M）—— renderMerged 后刷新 */
+    private var pickupSubRefresh: (() -> Unit)? = null
 
     /** 首页网格里的一格 */
     data class HomeCode(val code: String, val station: String, val picked: Boolean = false)
@@ -10678,21 +10924,35 @@ class MainActivity : Activity() {
         // ★ vc321：layer 从 LinearLayout 换成「FrameLayout 外壳 + column 纵列」——
         //   底部三图标 dock 要挂进层内（LinearLayout 没法叠加），图标才能跟页面同进同出。
         val layer = FrameLayout(this).apply {
-            setBackgroundColor(cBg)
+            // ★ v2 马卡龙：取件码页底铺环境光
+            background = AmbientGlowDrawable(isDark())
         }
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
-        val top = makeTopBar(getString(R.string.pickup_title), accent = "#0A9E7B")
-        // ★★ v1.3.1：顶栏「清已取 N」—— 一键删掉**所有已取件**的码（二次确认）。
-        //   放在顶栏而不是设置里（同志定）：取件就在这个页面，清理也该在这儿。
+        // ★ v2 顶栏版式：左＝大标题「取件码」26px + 副行「N 张 · 待取 M」12px；
+        //   右＝「清已取」天青胶囊按钮（.pillbtn）。顶栏透明，环境光透出。
+        val top = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding((22 * dp).toInt(), (6 * dp).toInt(), (18 * dp).toInt(), (14 * dp).toInt())
+        }
+        val pickupSubTv = TextView(this).apply {
+            text = pickupSubtitle()
+            textSize = UiTok.T12
+            setTextColor(cTextSecondary)
+        }
         run {
             /** 缓存里所有带「已取件」标记的条目 —— 只用于弹窗里交代"另有 N 条历史"，不再当按钮数字 */
             fun pickedCacheCount() = PddCodeStore.all(this).values.count { it.pickedAt != 0L }
+            // ★ v2 .pillbtn：天青胶囊 + 强调字
             val clearBtn = TextView(this).apply {
-                textSize = UiTok.T13
-                setTextColor(cTextFaint)
-                setPadding((10 * dp).toInt(), (6 * dp).toInt(), (10 * dp).toInt(), (6 * dp).toInt())
+                textSize = UiTok.T135
+                typeface = tfMedium
+                gravity = Gravity.CENTER
+                setTextColor(cAccent)
+                background = sq(UiTok.R999, UiTok.accentSoft(isDark()))
+                setPadding((15 * dp).toInt(), (9 * dp).toInt(), (15 * dp).toInt(), (9 * dp).toInt())
                 isClickable = true
             }
             // ★★ v1.4.13：**数字 = 当前页面上真正显示着「已取件」的卡数**。
@@ -10707,7 +10967,8 @@ class MainActivity : Activity() {
                 clearBtn.text = if (n > 0) "清已取 $n" else "清已取"
                 clearBtn.setTextColor(if (n > 0) cAccent else cTextFaint)
             }
-            pickupClearBtnRefresh = { refreshClearBtn() }
+            pickupSubRefresh = { pickupSubTv.text = pickupSubtitle() }
+        pickupClearBtnRefresh = { refreshClearBtn() }
             refreshClearBtn()
             clearBtn.setOnClickListener {
                 val shown = if (pickupPickedVisible >= 0) pickupPickedVisible else 0
@@ -10778,6 +11039,23 @@ class MainActivity : Activity() {
                         .showAnimated()
                 }
             }
+            // 左：大标题 + 副行（v2 .bar h2 / .sub）
+            val titleBox = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+            }
+            titleBox.addView(TextView(this).apply {
+                text = getString(R.string.pickup_title)
+                textSize = UiTok.T26
+                typeface = tfMedium
+                letterSpacing = -0.015f
+                setTextColor(cTextPrimary)
+            })
+            titleBox.addView(pickupSubTv, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (4 * dp).toInt() })
+            top.addView(titleBox, LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+            ))
             top.addView(clearBtn)
         }
         // ★ vc264n（同志 04:16 要求）：删掉右上角刷新键 —— 手动刷新走**下拉手势**
@@ -10795,6 +11073,10 @@ class MainActivity : Activity() {
         ))
 
         val scroll = ScrollView(this)
+        // ★ P2 渐进遮罩（与在途页同一套口径）
+        runCatching {
+            scroll.foreground = ProgressiveFadeDrawable(cBg, fromTop = true, fadePx = 28f * dp)
+        }
         val list = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             // ★ vc318：底部多留 96dp —— 给悬浮导航让通道，最后一张卡能滚到图标上方而不被盖住
@@ -10902,6 +11184,7 @@ class MainActivity : Activity() {
         pickupScroll = null
         // ★ v1.4.9b：顶栏按钮的引用一起清掉（视图已随层销毁，留着是脏引用）
         pickupClearBtnRefresh = null
+        pickupSubRefresh = null
         pickupPickedVisible = -1
         // ★ vc321：dock 已在层内，随层一起走，不再单独拆（引用清掉防挂脏）
         pickupDock = null
@@ -11003,40 +11286,55 @@ class MainActivity : Activity() {
 
     /** 单个悬浮图标：主页三栏同款徽标（48dp 圆角方块）+ 按压动效 */
     private fun dockCell(ch: String, colorHex: String, desc: String, action: () -> Unit): View {
-        val cell = FrameLayout(this)
+        // ★ v2 .dock .it：**竖排** —— 上＝36dp 马卡龙色块（14sp 字），下＝11.5px 文字标签；
+        //   选中态仍归系统蓝（.it.on），糖果色只做底不抢「当前在哪」。
+        val cell = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
         cell.layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { marginStart = (UiTok.S12 * dp).toInt(); marginEnd = (UiTok.S12 * dp).toInt() }
+        ).apply { marginStart = (UiTok.S16 * dp).toInt(); marginEnd = (UiTok.S16 * dp).toInt() }
 
-        // ★ vc581：与首页品牌方块统一 —— **淡底 + 品牌色字**，不再整块高饱和实底
-        //   （同志口径：底部三块和新的中性卡片放一起，实底太跳）
-        val brand = Color.parseColor(colorHex)
+        // 色块底色：淘=樱 / 拼=薰 / 菜=薄（与首页身份三格同一套）；其余退回品牌色
+        val tileBg = when (ch) {
+            "淘" -> UiTok.macRose(isDark())
+            "拼" -> UiTok.macLilac(isDark())
+            "菜" -> UiTok.macMint(isDark())
+            else -> {
+                val b = Color.parseColor(colorHex)
+                UiTok.brandWithAlpha(b, UiTok.brandTileAlpha(isDark()))
+            }
+        }
         val badge = TextView(this).apply {
             text = ch
-            textSize = UiTok.T17
+            textSize = UiTok.T14
             typeface = tfMedium
             gravity = Gravity.CENTER
             includeFontPadding = false
-            setTextColor(brand)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = UiTok.R10 * dp
-                setColor(UiTok.brandWithAlpha(brand, UiTok.brandTileAlpha(isDark())))
-                setStroke(
-                    maxOf(1, (UiTok.HAIR * dp).toInt()),
-                    if (isDark()) 0x14FFFFFF else 0x0F000000
-                )
-            }
-            isClickable = true
-            isFocusable = true
-            contentDescription = desc
+            setTextColor(cTextPrimary)
+            background = sq(UiTok.R14, tileBg)
         }
-        // ★ vc583：56dp（原 40dp），字 17sp，手指更好点
-        cell.addView(badge, FrameLayout.LayoutParams((56 * dp).toInt(), (56 * dp).toInt()))
+        // ★ vc583：36dp 色块（v2 .ch = 30px，本机手指加大一档）
+        cell.addView(badge, LinearLayout.LayoutParams(
+            (36 * dp).toInt(), (36 * dp).toInt()
+        ))
+        // ★ v2 标签（.dock .it：11.5px 次级色，与色块间距 5px）
+        val label = TextView(this).apply {
+            text = desc
+            textSize = UiTok.T115
+            setTextColor(cTextSecondary)
+            gravity = Gravity.CENTER
+            maxLines = 1
+        }
+        cell.addView(label, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = (5 * dp).toInt() })
 
         // —— 按压动效（唯一保留）：按下缩小，松手轻弹回；返回 false 不拦截 ⇒ click 照常 ——
+        //   ★ v2：动效挂 cell（整个 .it 含标签），手指点标签也能按
         var pressed = false
-        badge.setOnTouchListener { v, e ->
+        cell.setOnTouchListener { v, e ->
             when (e.actionMasked) {
                 android.view.MotionEvent.ACTION_DOWN -> {
                     pressed = true
@@ -11068,11 +11366,12 @@ class MainActivity : Activity() {
     // ---------- 设置页（主题） ----------
 
     private fun buildSettingsButton(): View {
-        val size = (52 * dp).toInt()
+        // ★ v2 .gear：36dp 圆形、薰衣草淡底，站在顶栏右侧（不再是右下 52dp 悬浮球）
+        val size = (36 * dp).toInt()
         val icon = ImageView(this).apply {
             setImageResource(R.drawable.ic_setting)
             scaleType = ImageView.ScaleType.FIT_CENTER
-            setPadding((13 * dp).toInt(), (13 * dp).toInt(), (13 * dp).toInt(), (13 * dp).toInt())
+            setPadding((9 * dp).toInt(), (9 * dp).toInt(), (9 * dp).toInt(), (9 * dp).toInt())
             contentDescription = getString(R.string.cd_settings)
             if (isDark()) setColorFilter(cTextPrimary)
         }
@@ -11133,9 +11432,21 @@ class MainActivity : Activity() {
         }
         box.addView(icon, FrameLayout.LayoutParams(size, size))
         box.layoutParams = FrameLayout.LayoutParams(size, size).apply {
-            gravity = Gravity.BOTTOM or Gravity.END
-            setMargins(0, 0, (20 * dp).toInt(), (28 * dp).toInt())
+            gravity = Gravity.TOP or Gravity.END
+            // 初始给一个保守值，避免 inset 未分发时齿轮压进状态栏
+            setMargins(0, maxOf(statusBarTop, (36 * dp).toInt()) + (10 * dp).toInt(),
+                       (20 * dp).toInt(), 0)
         }
+        // ★ inset 到达后按真实状态栏高度重排（onCreate 时 statusBarTop 常为 0）
+        box.setOnApplyWindowInsetsListener { v, insets ->
+            val t = insets.getInsets(WindowInsets.Type.statusBars()).top
+            (v.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
+                lp.topMargin = maxOf(t, statusBarTop) + (10 * dp).toInt()
+                v.layoutParams = lp
+            }
+            insets
+        }
+        box.post { box.requestApplyInsets() }
         return box
     }
 
@@ -11168,12 +11479,14 @@ class MainActivity : Activity() {
 
         val layer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(cBg)
+            // ★ v2 马卡龙：设置页底铺环境光
+            background = AmbientGlowDrawable(isDark())
         }
         // ★ vc307：同志要求删除左上角「‹ 返回」键 —— 手机侧滑手势 / 底部返回键仍可返回
         //   （handleBack 对设置层的判定保持不变，只是不再显示这个按钮）。
         // ★ vc328：同志要求设置页左上角「设置」放大（其余页面顶栏字号不变，默认仍 17f）
-        attachTopBar(layer, makeTopBar(getString(R.string.settings_title), titleSize = 22f))
+        // ★ v2 .set-h：设置页大标题 26px（顶栏透明，环境光透出）
+        attachTopBar(layer, makeTopBar(getString(R.string.settings_title), titleSize = UiTok.T26))
 
         val scroll = ScrollView(this)
         // 页面级外层：只管外边距，卡片自己管背景和内边距
@@ -11280,7 +11593,8 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 isClickable = true
-                setPadding(0, (4 * dp).toInt(), 0, (4 * dp).toInt())
+                // ★ v2 对齐：与 sectionTitle / 行卡同一条 16dp 基准线
+                setPadding((UiTok.S16 * dp).toInt(), (8 * dp).toInt(), (UiTok.S16 * dp).toInt(), (8 * dp).toInt())
             }
             header.addView(TextView(this).apply {
                 text = title
@@ -11307,7 +11621,8 @@ class MainActivity : Activity() {
         // ★ 当前卡片：下面所有 card.addView(...) 都落在这张卡里。
         //   要换一张卡，只需重新给 card 赋值 —— 几百行既有代码一行都不用动（2026-09-20 拆卡片）
         var card = linearCard().apply {
-            setPadding((16 * dp).toInt(), (16 * dp).toInt(), (16 * dp).toInt(), (16 * dp).toInt())
+            // ★ v2 统一：卡级不再套 padding —— 标题/行各自带 16dp 左缩进，标题左缘永远对齐
+            orientation = LinearLayout.VERTICAL
         }
         addCard(card)
         // ★ vc327：「深色模式」分类加折叠 —— 标题行右侧箭头，点击展开/收起整卡内容
@@ -11410,7 +11725,7 @@ class MainActivity : Activity() {
         themeBox.addView(timeBox)
         themeBox.addView(TextView(this).apply {
             text = getString(R.string.settings_scheduled_hint)
-            textSize = 12f
+            textSize = UiTok.T115
             setTextColor(cTextTertiary)
             // ★ vc702：与其它行统一到 S16
             setPadding((UiTok.S16 * dp).toInt(), (8 * dp).toInt(), (UiTok.S16 * dp).toInt(), 0)
@@ -11420,7 +11735,8 @@ class MainActivity : Activity() {
         // ★ 换一张新卡片：外观（深色模式）与数据源从此各占一张卡（2026-09-20 同志要求）
         // ★ vc326：分类改名「快递数据源」+ 可折叠；vc327 换用公共折叠件（带动画）
         card = linearCard().apply {
-            setPadding((16 * dp).toInt(), (16 * dp).toInt(), (16 * dp).toInt(), (16 * dp).toInt())
+            // ★ v2 统一：卡级不再套 padding —— 标题/行各自带 16dp 左缩进，标题左缘永远对齐
+            orientation = LinearLayout.VERTICAL
         }
         addCard(card)
         val srcBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -11434,7 +11750,8 @@ class MainActivity : Activity() {
             name: String, status: String, ok: Boolean,
             // ★ vc422：状态文字可单独指定颜色/字号（默认沿用原来的蓝色/三级灰）
             statusColor: Int? = null,
-            statusSize: Float = 13f,
+            // ★ v2 统一：行卡右侧值 14px（.rowcard .v）
+            statusSize: Float = UiTok.T14,
             // ★ onMoreClick 必须排在 onClick 前面：调用方都用尾随 lambda，尾参永远匹配最后一个参数
             onMoreClick: (() -> Unit)? = null,
             onClick: () -> Unit
@@ -11451,10 +11768,12 @@ class MainActivity : Activity() {
             }
             row.addView(TextView(this).apply {
                 text = name
-                textSize = UiTok.T15
+                // ★ v2 统一：行卡主标题 16px Medium（.rowcard .k .t）
+                textSize = UiTok.T16
+                typeface = tfMedium
                 setTextColor(cTextPrimary)
             })
-            // "更多"图标：紧贴名称文字右侧，高度跟 15sp 文字齐平（18dp）
+            // "更多"图标：紧贴名称文字右侧，高度跟主标题齐平（18dp）
             if (onMoreClick != null) {
                 val iv = android.widget.ImageView(this).apply {
                     setImageResource(R.drawable.mi_more)
@@ -11474,7 +11793,8 @@ class MainActivity : Activity() {
                 row.addView(TextView(this).apply {
                     text = status
                     textSize = statusSize
-                    setTextColor(statusColor ?: cTextTertiary)
+                    // ★ v2 统一：右侧值用次级色（.rowcard .v = ink2），数字场景由调用方覆盖
+                    setTextColor(statusColor ?: cTextSecondary)
                     maxLines = 1
                     gravity = Gravity.END
                     ellipsize = android.text.TextUtils.TruncateAt.END
@@ -11531,7 +11851,9 @@ class MainActivity : Activity() {
         }
         pddHeader.addView(TextView(this).apply {
             text = "拼多多"
-            textSize = 15f
+            // ★ v2 统一：行卡主标题 16px Medium（与 sourceRow 同档）
+            textSize = UiTok.T16
+            typeface = tfMedium
             setTextColor(cTextPrimary)
         })
         // ★ vc703：与其它行同款 ⓘ（多账号语义容易误解，值得说明）
@@ -11896,7 +12218,8 @@ class MainActivity : Activity() {
 
         // ---- 身份码（vc536）：淘宝身份码跳转 + 菜鸟身份码替换 ----
         card = linearCard().apply {
-            setPadding((16 * dp).toInt(), (16 * dp).toInt(), (16 * dp).toInt(), (16 * dp).toInt())
+            // ★ v2 统一：卡级不再套 padding —— 标题/行各自带 16dp 左缩进，标题左缘永远对齐
+            orientation = LinearLayout.VERTICAL
         }
         addCard(card)
         card.addView(TextView(this).apply {
@@ -11938,7 +12261,8 @@ class MainActivity : Activity() {
 
         // ---- 后台快递跟踪：不开 App 也能发现物流变化并通知 ----
         card = linearCard().apply {
-            setPadding((16 * dp).toInt(), (16 * dp).toInt(), (16 * dp).toInt(), (16 * dp).toInt())
+            // ★ v2 统一：卡级不再套 padding —— 标题/行各自带 16dp 左缩进，标题左缘永远对齐
+            orientation = LinearLayout.VERTICAL
         }
         addCard(card)
         card.addView(TextView(this).apply {
@@ -12065,7 +12389,8 @@ class MainActivity : Activity() {
         //   ⑥ 导出日志 ⇒ 单独一张卡，放设置页最底部。
         //   ★ 同志 2026-09-22：流体云从「数据源」卡片里挪出来 —— 它不是"数据源"，而是系统能力适配。
         card = linearCard().apply {
-            setPadding((16 * dp).toInt(), (16 * dp).toInt(), (16 * dp).toInt(), (16 * dp).toInt())
+            // ★ v2 统一：卡级不再套 padding —— 标题/行各自带 16dp 左缩进，标题左缘永远对齐
+            orientation = LinearLayout.VERTICAL
         }
         addCard(card)
         card.addView(TextView(this).apply {
@@ -12158,7 +12483,8 @@ class MainActivity : Activity() {
         // ---- 常驻后台增强（vc288 新分类：Shizuku + Stellar + 隐藏最近任务卡片）----
         //   ★ 三项都是"给常驻保护/后台存活加料"的增强能力，语义归到同一张卡。
         card = linearCard().apply {
-            setPadding((16 * dp).toInt(), (16 * dp).toInt(), (16 * dp).toInt(), (16 * dp).toInt())
+            // ★ v2 统一：卡级不再套 padding —— 标题/行各自带 16dp 左缩进，标题左缘永远对齐
+            orientation = LinearLayout.VERTICAL
         }
         addCard(card)
         card.addView(TextView(this).apply {
@@ -12301,7 +12627,8 @@ class MainActivity : Activity() {
 
         // ---- 桌面小组件（vc289，同志 10-16 要求：材质/不透明度自定义，借鉴南风天气）----
         card = linearCard().apply {
-            setPadding((16 * dp).toInt(), (16 * dp).toInt(), (16 * dp).toInt(), (16 * dp).toInt())
+            // ★ v2 统一：卡级不再套 padding —— 标题/行各自带 16dp 左缩进，标题左缘永远对齐
+            orientation = LinearLayout.VERTICAL
         }
         addCard(card)
         card.addView(TextView(this).apply {
@@ -15156,6 +15483,7 @@ class MainActivity : Activity() {
         // ★★ v1.4.9b：**「清已取 N」用页面上真正显示出来的已取件卡数**，不再数缓存条数
         pickupPickedVisible = visible.count { it.optLong("pickedAt", 0L) != 0L }
         try { pickupClearBtnRefresh?.invoke() } catch (t: Throwable) { SafeRun.w("PickupClear", t) }
+        try { pickupSubRefresh?.invoke() } catch (t: Throwable) { SafeRun.w("PickupClear", t) }
         getSharedPreferences(PREFS, MODE_PRIVATE).edit()
             .putInt(KEY_LAST_PKG_COUNT, activeCount)
             .putString(KEY_LAST_PKG_TIME, now)
@@ -15854,10 +16182,12 @@ class MainActivity : Activity() {
         }
         row.addView(TextView(this).apply {
             text = name
-            textSize = UiTok.T15
+            // ★ v2 统一：行卡主标题 16px Medium
+            textSize = UiTok.T16
+            typeface = tfMedium
             setTextColor(cTextPrimary)
         })
-        // "更多"图标：紧贴名称文字右侧，高度跟 15sp 文字齐平（与 sourceRow 同一套）
+        // "更多"图标：紧贴名称文字右侧，高度跟主标题齐平（与 sourceRow 同一套）
         if (onMoreClick != null) {
             val iv = android.widget.ImageView(this).apply {
                 setImageResource(R.drawable.mi_more)
@@ -15913,7 +16243,9 @@ class MainActivity : Activity() {
         }
         row.addView(TextView(this).apply {
             text = name
-            textSize = UiTok.T15
+            // ★ v2 统一：行卡主标题 16px Medium
+            textSize = UiTok.T16
+            typeface = tfMedium
             setTextColor(cTextPrimary)
         })
         // ★ vc703：说明图标（与 sourceRow 同款、同尺寸、同位置规则）
@@ -15937,13 +16269,33 @@ class MainActivity : Activity() {
             //   44×26 只作为**视觉目标**写在规范里，实际以"手指好点"为准。
             // 与 animateSwitchTint 同一套口径（滑块=实心基础色，轨道=同色 38%），
             // 否则首帧是平台色、点一下才跳成我们的色
-            val base0 = if (checked) cAccent else cTextFaint
-            thumbTintList = android.content.res.ColorStateList.valueOf(base0)
-            trackTintList = android.content.res.ColorStateList.valueOf(withAlpha(base0, 0.38f))
+            // ★ v2 统一：开关 = 白滑块 + 凝光渐变轨道（#8FC0FA→#0080FF）；
+            //   关闭态灰轨道。轨道用 GradientDrawable 承载渐变（tint 只能纯色）。
+            thumbTintList = android.content.res.ColorStateList.valueOf(
+                if (checked) 0xFFFFFFFF.toInt() else 0xFFB9BEC6.toInt()
+            )
+            trackDrawable = GradientDrawable().apply {
+                orientation = GradientDrawable.Orientation.TOP_BOTTOM
+                colors = if (checked) intArrayOf(
+                    UiTok.switchTrackTop(isDark()), UiTok.switchTrackBottom(isDark())
+                ) else intArrayOf(UiTok.switchOff(isDark()), UiTok.switchOff(isDark()))
+                cornerRadius = 999f
+            }
+            trackTintList = null
             setOnCheckedChangeListener { sw, c ->
-                // ★ 强转：trackTintList/thumbTintList 是 Switch 自己声明的（不在 CompoundButton 上）
-                animateSwitchTint(sw as android.widget.Switch, c)
-                onToggle(c, sw as android.widget.Switch)
+                val s = sw as android.widget.Switch
+                // 渐变轨道：直接换 drawable（tint 动画不适用于渐变，硬切）
+                s.trackDrawable = GradientDrawable().apply {
+                    orientation = GradientDrawable.Orientation.TOP_BOTTOM
+                    colors = if (c) intArrayOf(
+                        UiTok.switchTrackTop(isDark()), UiTok.switchTrackBottom(isDark())
+                    ) else intArrayOf(UiTok.switchOff(isDark()), UiTok.switchOff(isDark()))
+                    cornerRadius = 999f
+                }
+                s.thumbTintList = android.content.res.ColorStateList.valueOf(
+                    if (c) 0xFFFFFFFF.toInt() else 0xFFB9BEC6.toInt()
+                )
+                onToggle(c, s)
             }
         }, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -16671,12 +17023,11 @@ class MainActivity : Activity() {
 
     private fun applyTransitTabChipLook(tv: TextView, active: Boolean) {
         tv.text = transitTabChipText(tv.tag as? String ?: "")
-        tv.setTextColor(if (active) Color.WHITE else cTextSecondary)
+        // ★ v2 统一：分段控件 = .seg —— 容器薰衣草、选中项白（夜 22% 白）+ 主文字色，
+        //   未选中项透明（让容器的薰衣草透出来），不再整块高饱和蓝。
+        tv.setTextColor(if (active) cTextPrimary else cTextSecondary)
         val g = tv.background as? GradientDrawable
-        g?.setColor(
-            if (active) cAccent
-            else if (isDark()) Color.parseColor("#2A2B2F") else Color.parseColor("#F1F2F6")
-        )
+        g?.setColor(if (active) UiTok.segSelBg(isDark()) else Color.TRANSPARENT)
     }
 
     /** 重建 / 刷新标签条（数量随渲染变化，每次渲染后调一次） */
@@ -16695,10 +17046,10 @@ class MainActivity : Activity() {
                 for (s in avail) {
                     val tv = TextView(this).apply {
                         tag = s
-                        textSize = UiTok.T12
+                        textSize = UiTok.T125
                         typeface = tfMedium
                         gravity = Gravity.CENTER
-                        setPadding((14 * dp).toInt(), (6 * dp).toInt(), (14 * dp).toInt(), (6 * dp).toInt())
+                        maxLines = 1
                         background = GradientDrawable().apply {
                             shape = GradientDrawable.RECTANGLE
                             cornerRadius = UiTok.R999 * dp
@@ -16707,9 +17058,10 @@ class MainActivity : Activity() {
                         setOnClickListener { switchTransitTabTo(s) }
                     }
                     applyTransitTabChipLook(tv, s == transitSrc)
+                    // ★ v2 .seg .s：等分、32dp 高、3dp 间隙
                     row.addView(tv, LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-                    ).apply { rightMargin = (8 * dp).toInt() })
+                        0, (32 * dp).toInt(), 1f
+                    ).apply { leftMargin = (1 * dp).toInt(); rightMargin = (1 * dp).toInt() })
                 }
             } else {
                 for (i in 0 until row.childCount) {
@@ -17108,9 +17460,9 @@ class MainActivity : Activity() {
     /** 修饰字：紧贴在品类词前面时不算名字的一部分（"丰脆柿子" → "柿子"） */
     private val GOODS_MOD = "脆甜新鲜大小好优纯正特超薄厚宽高多全老香美嫩软硬干湿精品级版款型号装盒袋".toSet()
 
-    /** 小标签的胶囊底色 */
+    /** 小标签的胶囊底色 —— ★ v2 .gtag 口径：中性灰 rgba(0,0,0,.05)，不带品牌色 */
     private fun tagBg(): android.graphics.drawable.Drawable = sq(
-        UiTok.R999, if (isDark()) 0x1FFFFFFF else 0xFFF1F2F6.toInt()
+        UiTok.R999, UiTok.gtagBg(isDark())
     )
 
     /**
@@ -17174,7 +17526,7 @@ class MainActivity : Activity() {
         if (labelLayer != null) return
         val layer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(cBg)
+            background = AmbientGlowDrawable(isDark())
         }
         attachTopBar(layer, makeTopBar("取件位置标签"))
         val scroll = ScrollView(this)
@@ -17427,19 +17779,23 @@ class MainActivity : Activity() {
         return row
     }
 
-    /** ★ vc707：分类标题 —— 与 collapsibleHeader 同一套字号/颜色（13sp · 次级色 · 不加粗） */
+    /** ★ v2 统一：分类标题 = 13px · Medium · 次级色 · 字距 +0.2；左缩进 16dp 与行卡对齐 */
     private fun sectionTitle(text: String): TextView = TextView(this).apply {
         this.text = text
         textSize = UiTok.T13
+        typeface = tfMedium
+        letterSpacing = 0.015f
         setTextColor(cTextSecondary)
+        // ★ v2 对齐：标题左缘 = 行卡左缘（16dp）；上下留呼吸，不再挤在卡边
+        setPadding((UiTok.S16 * dp).toInt(), (12 * dp).toInt(), (UiTok.S16 * dp).toInt(), (8 * dp).toInt())
     }
 
-    /** ★ vc707：卡内说明行（12sp · 三级灰 · 左右内边距与行对齐） */
+    /** ★ v2 统一：卡内提示行 = 11.5px · 三级灰（.id .nm / .ccard .date 口径，比旧 12sp 弱一档） */
     private fun hintLine(text: String): TextView = TextView(this).apply {
         this.text = text
-        textSize = UiTok.T12
+        textSize = UiTok.T115
         setTextColor(cTextTertiary)
-        setPadding((UiTok.S16 * dp).toInt(), (UiTok.S4 * dp).toInt(),
+        setPadding((UiTok.S16 * dp).toInt(), 0,
                    (UiTok.S16 * dp).toInt(), (UiTok.S8 * dp).toInt())
     }
 
@@ -17460,19 +17816,16 @@ class MainActivity : Activity() {
     }
 
     private fun chip(text: String, colorHex: String): TextView = TextView(this).apply {
-        val brand = Color.parseColor(colorHex)
+        // ★ v2 统一：平台胶囊 = .plat —— 樱粉底 + 深樱粉字（首页/取件码/在途共用一套），
+        //   不再按品牌色各染各的（v2 稿口径：平台胶囊一律樱粉，身份区分交给身份码三格）。
         this.text = text
-        textSize = UiTok.T11
+        textSize = UiTok.T13
         typeface = tfMedium
-        setTextColor(brand)
+        letterSpacing = 0.015f
+        setTextColor(UiTok.platText(isDark()))
         gravity = Gravity.CENTER
-        background = sq(
-            UiTok.R999,
-            UiTok.brandWithAlpha(brand, UiTok.brandTileAlpha(isDark())),
-            stroke = UiTok.brandWithAlpha(brand, if (isDark()) 0x3A else 0x26),
-            strokeDp = 0.6f
-        )
-        setPadding((UiTok.S8 * dp).toInt(), (2 * dp).toInt(), (UiTok.S8 * dp).toInt(), (2 * dp).toInt())
+        background = sq(UiTok.R999, UiTok.platBg(isDark()))
+        setPadding((UiTok.S12 * dp).toInt(), (4 * dp).toInt(), (UiTok.S12 * dp).toInt(), (4 * dp).toInt())
     }
 
     private fun chipLp(): LinearLayout.LayoutParams = LinearLayout.LayoutParams(
@@ -17605,7 +17958,7 @@ class MainActivity : Activity() {
             if (born != null) {
                 val cal = java.util.Calendar.getInstance().apply { timeInMillis = born }
                 String.format(
-                    java.util.Locale.US, "%02d-%02d下单",
+                    java.util.Locale.US, "%02d-%02d 下单",
                     cal.get(java.util.Calendar.MONTH) + 1,
                     cal.get(java.util.Calendar.DAY_OF_MONTH)
                 )
@@ -17632,7 +17985,8 @@ class MainActivity : Activity() {
             listOf(
                 // ★ vc683：公司名已经做成头部 chip，明细行不再重复（原来会「极兔 · 极兔速递」）
                 // ★ v1.4.9：商品标题已经单独占一行（见上方 goodsTitle），明细行不再重复它
-                addr.ifEmpty { pkg.optString("statusText") }, orderDate
+                // ★ v2：下单时间已提升到卡顶独立行（.ccard .date），明细行不再带
+                addr.ifEmpty { pkg.optString("statusText") }
             ).filter { it.isNotEmpty() }.joinToString(" · ")
         } else {
             // ★ vc302：有驿站地址的卡（淘宝到站卡等）明细行显示**地址** ——
@@ -17656,6 +18010,17 @@ class MainActivity : Activity() {
         // 左：来源 + 取件码 + 说明
         val left = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
+        // ★ v2 卡顶下单时间（.ccard .date：11.5px 三级灰）—— 先看新旧，再看内容
+        if (orderDate.isNotEmpty()) {
+            left.addView(TextView(this@MainActivity).apply {
+                text = orderDate
+                textSize = UiTok.T115
+                setTextColor(cTextTertiary)
+                letterSpacing = 0.01f
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = (8 * dp).toInt() })
+        }
         val headRow = LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -17837,10 +18202,22 @@ class MainActivity : Activity() {
             ellipsize = android.text.TextUtils.TruncateAt.END
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         if (code.isNotEmpty()) {
-            val markBtn = chip(
-                if (isPicked) "取消已取件" else "标记已取件",
-                if (isPicked) "#757575" else ACCENT_HEX
-            )
+            // ★ v2 统一：操作按钮 = .tbtn（天青胶囊 + 强调字），不是平台胶囊（.plat 樱粉）——
+            //   未取件 = accent-soft 蓝，已取件 = 中性灰（可撤销）。
+            val markBtn = TextView(this@MainActivity).apply {
+                text = if (isPicked) "取消已取件" else "标记已取件"
+                textSize = UiTok.T13
+                typeface = tfMedium
+                gravity = Gravity.CENTER
+                if (isPicked) {
+                    setTextColor(cTextSecondary)
+                    background = sq(UiTok.R999, UiTok.gtagBg(isDark()))
+                } else {
+                    setTextColor(cAccent)
+                    background = sq(UiTok.R999, UiTok.accentSoft(isDark()))
+                }
+                setPadding((14 * dp).toInt(), (7 * dp).toInt(), (14 * dp).toInt(), (7 * dp).toInt())
+            }
             markBtn.isClickable = true
             markBtn.setOnClickListener { togglePickedFromCard(pkg) }
             footRow.addView(markBtn, LinearLayout.LayoutParams(
@@ -17873,7 +18250,8 @@ class MainActivity : Activity() {
             ))
         }
 
-        val rounded = linearCardBg(12)
+        // ★ v2 统一：卡片圆角 28dp（.card = 26px 超椭圆）—— 原来 12dp 太尖，不像系统卡
+        val rounded = linearCardBg(UiTok.R28)
         val wrap = FrameLayout(this).apply {
             background = RippleDrawable(
                 ColorStateList.valueOf(cRipple), rounded, rounded
@@ -18133,7 +18511,7 @@ class MainActivity : Activity() {
         var sel = HomeWidgets.W_T2   // 当前编辑哪个组件
         val layer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(cBg)
+            background = AmbientGlowDrawable(isDark())
         }
         val back = TextView(this).apply {
             text = getString(R.string.btn_back)
@@ -18547,7 +18925,7 @@ class MainActivity : Activity() {
         if (whaleStyleLayer != null) return
         val layer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(cBg)
+            background = AmbientGlowDrawable(isDark())
         }
         val back = TextView(this).apply {
             text = getString(R.string.btn_back)

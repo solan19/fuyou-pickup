@@ -250,6 +250,29 @@ android {
         //   ③ 后台运行：原来跳 ACTION_MANAGE_OVERLAY_PERMISSION（悬浮窗），本应用没声明
         //      SYSTEM_ALERT_WINDOW ⇒ 改跳各 ROM 的真自启动页（本机实测 com.oplus.battery 的
         //      StartupAppListActivity 就是「自启动」），全不认时兜到应用信息页。
+        // v1.4.22：**v2 全页面对齐 + 卡片半融入背景 + P2 动效套件**（同志 19:00 定，手机断开后逐步修复）。
+        //   ① 卡片半融入：昼卡不再是死白，改「顶 92% 白 → 底 84% 白」垂直渐变（UiTok.cardBgTop/Bottom），
+        //      四角马卡龙环境光从卡后透出来；夜间保持 10% 白半透。
+        //   ② 首页 v2 重排：顶栏 26px 标题+副行、齿轮移到右上角 36dp、主卡 hero（68px 数字 / 41px 主码 /
+        //      绿点驿站 / 双按钮）、在途行 41dp 图标+摘要+19px 件数、身份码横排三格（樱/薰/薄）。
+        //      删除 2×2 网格（与主码重复且把首页撑过一屏），改「其余 N 件」单行胶囊。
+        //   ③ 在途页：26px 大标题+副行、平台标签条改薰衣草四等分胶囊（fillViewport=true 让 weight 生效）。
+        //   ④ 设置页：26px 大标题；卡片标题统一 16dp 左缩进（去 7 处卡级 padding），全部对齐。
+        //   ⑤ P2：FollowGlow.kt 跟手光（RadialGradient 裁到超椭圆、按下起光/MOVE 跟随/190ms 淡出）、
+        //      动效回弹（松手 OvershootInterpolator）、渐进遮罩（滚动区 foreground，仅顶部 28dp 雾化）。
+        //   ⑥ 修两个隐患：bindTopBarInset 不再覆盖调用方 padding；ProgressiveFadeDrawable 的 alpha
+        //      不能用 or（cBg 自带 FF alpha，or 完仍全不透明 = 同志反对的"大白边"）。
+        //   功能代码一行未动。真机四页复测全部通过。
+        // v1.4.21：**v2 马卡龙光色层落地 + 凝光可见化 + 设置页排版统一**（同志 2026-11-10 定，按 D-凝光-v2.html）。
+        //   ① 环境光 AmbientGlowDrawable：八个页面根铺四角马卡龙柔光（樱/薰/薄荷/奶油），
+        //      白卡浮在上面 —— "卡片全白看不到凝光"就是缺这层光；磨砂面采样到的也是带色的光。
+        //   ② 卡片软阴影：linearCard 挂框架 elevation + 超椭圆 outline（阴影画在 view 边界外不被裁），
+        //      昼 6dp / 夜 2dp，阴影色 rgba(15,26,44,.42) 偏蓝墨（v2 box-shadow 口径）。
+        //   ③ 设置页排版统一（v2 .rowcard 口径）：行主标题 16px Medium、右侧值 14px 次级色、
+        //      分组标题 13px Medium、卡内提示 11.5px —— sourceRow/trackRow/switchRow/homeRow 四类行一套。
+        //   ④ v2 配色：平台胶囊樱粉（.plat）、商品名中性灰（.gtag）、在途分段薰衣草容器+白选中项（.seg）、
+        //      开关白滑块+凝光渐变轨道；身份三格樱/薰/薄（淘/拼/菜），途=天青、云=薄荷绿。
+        //   功能代码一行未动。
         // v1.4.20：**凝光管线端到端走通：背景采样 → 模糊 → 材质混色 → 轮廓光**（同志 15:56 定路线 C，一加 13）。
         //   ① 新增 NingguangGlass：BackropBlurDrawable 四段管线 + NingGuang.glass() 接入器；
         //      采样 = 1/8 降采样捕获"玻璃背后的内容"（玻璃自身采样时隐藏，零递归）；
@@ -275,8 +298,8 @@ android {
         //   在四条链上各判一遍，后三条（PickupPublish / LiveUpdate 补推 / IslandHelper 补推）
         //   都只判 "有码 + 未取件"、**没过黑名单**；而且 PickupPublish 用整个 PddCodeStore、
         //   补推用 ExpressStore 快照交集 ⇒ 两个数据源互相覆盖，指纹来回翻（"没遵循规则"）。
-        versionCode = 739
-        versionName = "1.4.20"
+        versionCode = 741
+        versionName = "1.4.22"
     }
 
     buildTypes {
