@@ -132,6 +132,8 @@ class KeepAliveReceiver : BroadcastReceiver() {
         try {
             // ① 把可能被"划掉"撤走的周期任务补回来
             TrackScheduler.apply(ctx)
+            // ★ v1.4.24：开机 / 时间变更 / 时区变更后把定时提醒排程补回来
+            RemindScheduler.apply(ctx)
             // ② 立刻查一次（同一个 worker，与周期任务共用一份判定逻辑）
             TrackScheduler.runNow(ctx)
             // ③ ★ vc264：调度权已交给常驻服务。这里只做"服务不在就拉它一把"的无特权自愈

@@ -3970,6 +3970,8 @@ class MainActivity : Activity() {
         KeepAliveService.start(this, fromUser = true)
         // 周期任务保留（服务万一不在时的额外兜底）；兜底闹钟**撤销** —— 它已被证实会被推迟
         TrackScheduler.apply(this)
+        // ★ v1.4.24：定时提醒是独立排程（轮询关掉也要工作），App 启动时补一次
+        RemindScheduler.apply(this)
         KeepAlive.disarm(this)
         //   --ei debug_alarm_min 2   兜底闹钟改成 2 分钟后触发（验证"划掉后闹钟还在不在"）
         // 调试通道（后台跟踪专用，验证时用）：
