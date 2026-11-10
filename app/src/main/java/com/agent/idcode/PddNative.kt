@@ -1185,9 +1185,11 @@ object PddNative {
                             "shipping_status=$shipStatus（冲突时按物流）"
                 )
             }
-            // ★ vc213：已到站待取（凉席类）—— 第 4 栏语义，不进途中栏。
-            //   刻意不排「已到达」：那会误伤「已到达XX转运中心」这种真在途单
-            val waitWord = listOf("待取", "待领取", "待自提", "已入柜").firstOrNull { status.contains(it) }
+            // ★★ v1.4.13：用 [TransitRules.arrivalWords]（**严格版**，不含「已签收，待确认」）。
+            //   13:41 真机回归实证：换成 PickupVerdict.MSG_ARRIVED 全表后，3 个「已签收，待确认收货」
+            //   的件（洗面奶/沐浴露/柿子）被当成"到站待取"剔出在途候选，在途直接少了 3 件。
+            //   它们是"驿站代签、人还没去拿"，没码时只该留在在途栏。
+            val waitWord = TransitRules.arrivalWords.firstOrNull { status.contains(it) }
             if (waitWord != null && !msgInTransit) {
                 Log.i("PddNative", "在途扫描丢弃 $sn：到站待取文案「$waitWord」（文案=「$status」）")
                 continue

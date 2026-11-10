@@ -24,6 +24,19 @@ object PddCodeStore {
     private const val KEY = "pdd_code_cache"
 
     /**
+     * ★★ v1.4.15：**已作废的取件码**（一行一个，持久）。
+     *
+     * 同志 2026-11-10 14:09：「73-3-5888 是沐浴露的取件码，因为我已经取件了，但是他还在缓存，
+     * 所以会造成重复的出现，并且没有匹配的快递」。
+     *
+     * 格口码一个时刻只属于一件。同一个码在缓存里挂到 ≥2 张单上，只可能是抽取污染
+     * （详情页把上一次的码复用到别的单）⇒ 这个码对**任何**一单都不能再作数。
+     * 但抓取链下一轮会照旧把它抠出来重新写进来 —— 所以光清缓存没用，得记住"这码是废的"。
+     * 只在「重置取件码缓存」时整表清掉（届时连缓存一起重抓，等于重来一遍）。
+     */
+    private const val KEY_DEAD = "pdd_code_dead"
+
+    /**
      * ★ vc229：「已取件」标记的保留时长 —— 打上标记起 **24 小时**后才真正清除。
      *
      * 为什么要"标记 + 延迟删"而不是"发现已取件就立刻删"（同志 2026-10-12 要求）：
@@ -111,7 +124,19 @@ object PddCodeStore {
     // ★ vc281：后台 UiCacheSync（WorkManager 线程）现在也会写这份缓存，
     //   与 UI 主线程的读写可能撞车（后写的整表覆盖先写的单条）⇒ 全部方法加锁串行。
     @Synchronized
-    fun all(ctx: Context): LinkedHashMap<String, Cached> {
+    fun all(ctx: Context): LinkedHashMap<String, Cached> = load(ctx, skipDead = true)
+
+    /** 原始条目（含作废码）—— 只有 [sweepShared] 需要，用来发现"一码多单" */
+    @Synchronized
+    fun allRaw(ctx: Context): LinkedHashMap<String, Cached> = load(ctx, skipDead = false)
+
+    /**
+     * @param skipDead 遇到 [deadCodes] 里的码怎么办。
+     * · true（读给界面/裁决用）：**只把码抹掉，条目留着** —— 条目里有 pickedAt/waybill，
+     *   抹掉整条的话「已取件」标记跟着消失，那件反而会重新回到在途栏；
+     * · false（清扫用）：原样返回，否则清扫永远看不到那条码。
+     */
+    private fun load(ctx: Context, skipDead: Boolean): LinkedHashMap<String, Cached> {
         val out = LinkedHashMap<String, Cached>()
         val raw = sp(ctx).getString(KEY, "") ?: ""
         if (raw.isBlank()) return out
@@ -119,10 +144,12 @@ object PddCodeStore {
             val o = JSONObject(raw)
             val it = o.keys()
             val nowMs = System.currentTimeMillis()
+            val dead = if (skipDead) deadCodes(ctx) else HashMap<String, Long>()
             while (it.hasNext()) {
                 val k = it.next()
                 val v = o.optJSONObject(k) ?: continue
                 var c = Cached.from(v)
+                if (c.code.isNotBlank() && dead.containsKey(normCode(c.code))) c = c.copy(code = "")
                 // ★★ vc674：缓存条目自己没标「已取件」时，按**包裹身份**（订单号/运单号）
                 //   再问一次 [PickedStore] —— 重启后同件被别的来源重新写进来（新键、
                 //   pickedAt=0）时，就靠这一步把标记找回来，否则「退出重进又回来了」。
@@ -167,6 +194,14 @@ object PddCodeStore {
      */
     fun put(ctx: Context, sn: String, c: Cached) {
         if (sn.isBlank() || c.code.isBlank()) return
+        // ★★ v1.4.15：作废码一律拒写 —— 否则抓取链每轮都会把这个借来的码重新贴回去
+        if (isDead(ctx, c.code)) {
+            android.util.Log.i(
+                "PddCodeMatch",
+                "拒写已作废的码 ${c.code} → $sn（一码多单污染，见 sweepShared）"
+            )
+            return
+        }
         val map = all(ctx)
         val old = map[sn]
         // ★ vc655：pickedAt 与 account 都沿用旧值（新值为空时），避免整条重建把归属抹掉
@@ -181,6 +216,10 @@ object PddCodeStore {
     /** 跳过保留逻辑（用户主动取消「已取件」时用） */
     fun putForce(ctx: Context, sn: String, c: Cached) {
         if (sn.isBlank() || c.code.isBlank()) return
+        if (isDead(ctx, c.code)) {
+            android.util.Log.i("PddCodeMatch", "拒写已作废的码 ${c.code} → $sn（putForce）")
+            return
+        }
         val map = all(ctx)
         map[sn] = c
         save(ctx, map)
@@ -193,6 +232,112 @@ object PddCodeStore {
         val map = all(ctx)
         if (map.remove(sn) == null) return
         save(ctx, map)
+    }
+
+    /**
+     * ★★ v1.4.13：**清空全部取件码缓存**（同志 2026-11-10 13:50：「可以增加一个选项，用户可以点击，
+     * 此时清除取件码的所有缓存和数据，重新抓取」）。
+     *
+     * 用于码彻底乱掉的时候（同一个码挂在好几单、真码被借来的码顶掉、首页少了某件）——
+     * 与其一条条猜哪条是错的，不如整份丢掉重抓一次，让平台自己重新报一遍。
+     * 只动取件码这一份存储；在途缓存与黑名单不归这里管。
+     */
+    @Synchronized
+    fun clearAll(ctx: Context) {
+        try {
+            sp(ctx).edit().remove(KEY).remove(KEY_DEAD).apply()
+            android.util.Log.i("PddCache", "已清空全部取件码缓存（含作废码表）")
+        } catch (t: Throwable) {
+            SafeRun.w("PddCache", t)
+        }
+    }
+
+    // ---------------- ★★ v1.4.15：作废码表 ----------------
+
+    private fun normCode(s: String) = s.trim().lowercase()
+
+    /**
+     * 作废码的**有效期** —— 与取件码本身的认人时限同一个口径（[MuteStore] 的 7 天）。
+     * 格口码会被驿站回收再发，永久作废等于把这个码号段废掉。
+     */
+    private const val DEAD_TTL_MS = 7L * 86_400_000L
+
+    /** 已作废的码 → 作废时刻（小写比较；超过 7 天的自动失效） */
+    @Synchronized
+    fun deadCodes(ctx: Context): MutableMap<String, Long> {
+        val out = HashMap<String, Long>()
+        val raw = sp(ctx).getString(KEY_DEAD, "") ?: ""
+        if (raw.isBlank()) return out
+        val now = System.currentTimeMillis()
+        for (line in raw.split('\n')) {
+            val t = line.trim()
+            if (t.isEmpty()) continue
+            val code = t.substringBefore('|').trim()
+            val ts = t.substringAfter('|', "0").trim().toLongOrNull() ?: 0L
+            if (code.isEmpty()) continue
+            if (ts > 0L && now - ts > DEAD_TTL_MS) continue
+            out[code] = ts
+        }
+        return out
+    }
+
+    fun isDead(ctx: Context, code: String): Boolean {
+        val c = normCode(code)
+        return c.isNotEmpty() && deadCodes(ctx).containsKey(c)
+    }
+
+    @Synchronized
+    fun markDead(ctx: Context, code: String) {
+        val c = normCode(code)
+        if (c.isEmpty()) return
+        val map = deadCodes(ctx)
+        if (map.containsKey(c)) return
+        map[c] = System.currentTimeMillis()
+        sp(ctx).edit()
+            .putString(KEY_DEAD, map.entries.joinToString("\n") { "${it.key}|${it.value}" })
+            .apply()
+    }
+
+    /**
+     * ★★ v1.4.15：**一码多单 ⇒ 该码整批作废**（扫一遍缓存，参数为空，可每轮调用）。
+     *
+     * 判据只有一条：同一个非空取件码出现在 ≥2 个缓存条目上。
+     * 处理分两种：
+     * · 其中**有**条目打了「已取件」⇒ 那条才是真主（同志：「73-3-5888 是沐浴露的，
+     *   我已经取件了」），留它走完 24h 灰卡倒计时，**其余条目删掉**；
+     * · 一个都没打「已取件」⇒ 这码本身靠不住（格口码早就换人了），**全删**，
+     *   让补码链按各自订单重抓。
+     *
+     * 无论哪种，码都进 [KEY_DEAD]，之后 [put]/[putForce] 一律拒写 —— 不拒的话
+     * 下一轮抓取会原样把它贴回来，用户看到的就是"删了又出现、点开还找不到对应快递"。
+     *
+     * @return 本轮作废了几个码
+     */
+    @Synchronized
+    fun sweepShared(ctx: Context): Int {
+        // 必须是 allRaw：用 all() 的话作废码已被抹空，永远看不出"一码多单"
+        val map = allRaw(ctx)
+        if (map.isEmpty()) return 0
+        val byCode = HashMap<String, MutableList<String>>()
+        for ((k, c) in map) {
+            val cd = c.code.trim()
+            if (cd.isNotEmpty()) byCode.getOrPut(cd) { ArrayList() }.add(k)
+        }
+        var killed = 0
+        for ((cd, keys) in byCode) {
+            if (keys.size < 2) continue
+            markDead(ctx, cd)
+            killed++
+            val owner = keys.firstOrNull { (map[it]?.pickedAt ?: 0L) != 0L }
+            val drop = if (owner != null) keys.filter { it != owner } else keys
+            for (k in drop) map.remove(k)
+            android.util.Log.i(
+                "PddCodeMatch",
+                "码 $cd 被 ${keys.size} 单共用 ⇒ 作废${if (owner != null) "（真主 ${owner.substringAfter(':')} 已取件，其余 ${drop.size} 条删除）" else "（无主，${drop.size} 条全删）"}"
+            )
+        }
+        if (killed > 0) save(ctx, map)
+        return killed
     }
 
     private fun save(ctx: Context, map: Map<String, Cached>) {

@@ -335,10 +335,16 @@ object MuteStore {
                 title = exist.title.ifBlank { e.title },
                 ts = now,
                 permanent = exist.permanent || e.permanent,
-                // ★ v1.4.12：两边都有生效时刻时取**更早**的（不要因为重复写入把"立即生效"推后）
+                // ★★ v1.4.13：**"立即生效"必须压过"留 24 小时"**。
+                //   事故（同志 13:53）：「在取件码页面标记已取件并删除，取件码对应的快递又会回到在途快递中」。
+                //   原因是两次写入被合并时取了**更晚**的时刻：
+                //     · 标记已取件 → holdUntil = now + 24h（卡片要留 24h 给他核对）
+                //     · 清已取删除 → holdUntil = 0（要求立刻消失）
+                //   合并时旧逻辑 `e.holdUntil <= 0 -> exist.holdUntil` 把 24h 留下了
+                //   ⇒ 名单在这 24 小时里一直"不生效" ⇒ 件被重新抓回在途栏，标记白打了。
+                //   正确语义：只要有任何一次动作要求"立刻"，就以立刻为准（0 = 最早）。
                 holdUntil = when {
-                    exist.holdUntil <= 0L -> e.holdUntil
-                    e.holdUntil <= 0L -> exist.holdUntil
+                    exist.holdUntil <= 0L || e.holdUntil <= 0L -> 0L
                     else -> minOf(exist.holdUntil, e.holdUntil)
                 }
             )
@@ -421,6 +427,23 @@ object MuteStore {
     fun clear(c: Context) {
         val list = entries(c).filter { it.permanent }
         saveAll(c, list)
+    }
+
+    /**
+     * ★★ v1.4.13：**只清「已取件」写进来的记录**（id 前缀 `picked:`）。
+     *
+     * 「重置取件码缓存」时用：那些记录是标记已取件/清已取时按当时的数据写下的，
+     * 码都清空重抓了，这些归属判断自然也该作废 —— 否则重抓回来的件照样被名单挡住。
+     * 用户手动删过的件（id 为 `m…` 或 permanent）**不动**，那是他的明确意图。
+     */
+    fun clearPickedRecords(c: Context) {
+        val list = entries(c)
+        val before = list.size
+        list.removeAll { it.id.startsWith("picked:") && !it.permanent }
+        if (list.size != before) {
+            saveAll(c, list)
+            android.util.Log.i("MuteStore", "清掉「已取件」类记录 ${before - list.size} 条")
+        }
     }
 
     /** 全部删除 = 把现有记录全部标成永久隐藏 */

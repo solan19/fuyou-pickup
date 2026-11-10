@@ -169,8 +169,12 @@ class TrackWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         //   出库（OUT_CABINET/GOT）就打灰标；打标满 24h 的卡顺手清掉
         //   （以前只有打开取件码页才会触发清理）。
         try {
-            val tagOn = ctx.getSharedPreferences("idcode_prefs", Context.MODE_PRIVATE)
-                .getBoolean("auto_picked_tag", false)
+            // ★★ v1.4.13：**后台也不再自动打「已取件」**（同志 2026-11-10 13:31）。
+            //   拼多多的 SIGN / OUT_CABINET 只是"站点代签"，不等于"我本人取走了"；
+            //   按它打标会让这些件既不在取件码页待取、也不在在途栏，还会把「清已取」的
+            //   计数撑大（页面上根本没有这些卡）。⇒ 这个开关已随设置项一起撤掉，恒 false。
+            //   清理过期标记的逻辑保留（打标满 24h 的卡照常删）。
+            val tagOn = false
             val nowMs = System.currentTimeMillis()
             val store = PddCodeStore.all(ctx)
             var cleaned = 0
