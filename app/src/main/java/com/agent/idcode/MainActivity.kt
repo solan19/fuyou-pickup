@@ -759,28 +759,47 @@ class MainActivity : Activity() {
                                 continue
                             }
                             // ★ vc356：已到站但码没给（典型：菜鸟驿站，码在菜鸟手里）
-                            //   ⇒ 出占位卡 + 去淘宝按运单号补码，不许两栏都消失
+                            // ★★ v1.4.10：**但到了这一步不能搬走** —— 留在在途栏，等码补到再搬。
+                            //   事故（同志 2026-11-10 12:20「皇帝柑还没到，但在途快递看不到」）：
+                            //   皇帝柑（261105-380203210271958 / 极兔 JT5544361757046）枚举 SIGN、
+                            //   cabinet 没给码、只给驿站名 ⇒ 走这里被 promote 到「取件码」栏当无码卡。
+                            //   而「取件码」栏的价值就是**给出码**，一张无码卡摆在那儿用户根本不会看，
+                            //   于是两栏观感都是"没有这件"。真机日志：pdd 入参 7 张 → 下一次回调变 6 张。
+                            //   口径：**有码才进取件栏**；无码一律留在在途栏（后台照常补码，
+                            //   补到码后这条链下一轮自然把它搬过去）。
                             if (hit != null && hit.second.isNotEmpty()) {
-                                promotePddTransitToPickupNoCode(t, hit.second)
-                                promoted = true
-                                continue
+                                Log.i(
+                                    "PddEnum",
+                                    "到站但 cabinet 没给码，留在在途栏：${t.orderSn} @${hit.second}"
+                                )
                             }
                             // ★ vc356：枚举明确"已入柜/驿站" ⇒ 按到站处理（即使 cabinet 没给地址）
+                            // ★★ v1.4.10：同上 —— 入柜但无码也留在在途栏，不再搬成无码卡。
                             if (en == "IN_CABINET") {
-                                promotePddTransitToPickupNoCode(t, hit?.second.orEmpty())
-                                promoted = true
-                                continue
+                                Log.i("PddEnum", "入柜但无码，留在在途栏：${t.orderSn}")
                             }
                             if (!enumTransit && PddChannel.trackSaysNotInTransit(t.orderSn)) {
                                 Log.i("PddNative", "native 在途丢弃 ${t.orderSn}：track/status 判定不在途中")
                                 continue
                             }
                             // ★ vc218：已到驿站的单（凉席类）status 恒「待收货」、shipping_message 又
-                            //   没有驿站/取件码文本 ⇒ 文本判据全漏。但它**有取件码** ⇒ 第 4 栏
-                            //   （PddCodeStore，键 pdd:单号）必有它 ⇒ 这里交叉排除，第 5 栏只留真在途。
-                            if (!enumTransit && PddCodeStore.get(this, "pdd:" + t.orderSn) != null) {
-                                Log.i("PddNative", "native 在途丢弃 ${t.orderSn}：第4栏已有取件码卡")
-                                continue
+                            //   没有驿站/取件码文本 ⇒ 文本判据全漏。旧做法是"第4栏有缓存就丢"。
+                            // ★★ v1.4.10：**这条丢弃规则撤掉，只留日志**。
+                            //   事故（同志 2026-11-10 12:20「皇帝柑还没到，但在途快递看不到」）：
+                            //   皇帝柑 cabinet 明确回 `code=无 place=无`，可缓存里躺着一枚**借来的码**
+                            //   （同驿站另一件的 73-3-5888，被轨迹文本抠串了）⇒ 旧规则据此认定
+                            //   "第4栏已有取件码卡"把它丢掉；而取件栏那张卡的码正被"摘掉借来的码"清掉，
+                            //   于是**两栏都没有这件**。真机日志：
+                            //   `cabinet(...)→ code=无` / `native 在途丢弃 ...：第4栏已有取件码卡`。
+                            //   口径：**平台说待收货就留在在途栏**。重复显示顶多烦，丢件是事故。
+                            run {
+                                val cached = PddCodeStore.get(this, "pdd:" + t.orderSn)
+                                if (!enumTransit && cached?.code?.isNotEmpty() == true) {
+                                    Log.i(
+                                        "PddNative",
+                                        "第4栏有码（${cached.code}），在途栏仍保留：${t.orderSn}"
+                                    )
+                                }
                             }
                             kept.add(JSONObject().apply {
                                 put("src", "pdd")
@@ -2029,6 +2048,21 @@ class MainActivity : Activity() {
             addAll(manualTransit)
             addAll(testTransit)   // ★ vc264p：测试物流（默认空，生产零影响）
         })
+        // ★★ v1.4.10 诊断：**在途件到底在哪一步少的**。
+        //   12:15 真机：拼多多说"待收货 11 条 ⇒ 入选 11 条"，可页面只画 6 张，
+        //   中间 dedup / 终态 / 黑名单三道闸都没有日志说剔了谁 ⇒ 只能靠这两行定位。
+        Log.i(
+            "TransitBuild",
+            "入参 pdd=${pddTransit.size} tb=${tbTransit.size} cache=${cache?.size ?: 0} " +
+                    "pddSn=" + pddTransit.joinToString(",") { it.optString("orderSn") }
+        )
+        Log.i(
+            "TransitBuild",
+            "去重后 ${mergedTransit.size} 张：" + mergedTransit.joinToString(",") {
+                it.optString("orderSn") + "/" + it.optString("waybillNo")
+            }
+        )
+
         // ★★ v1.3.5：**删除取件码后，这件包裹也不该回到「在途快递」**。
         //   删除动作 = 清掉码缓存 + 把这件包裹加进 pickup_muted（屏蔽名单）。
         //   但码一没，它就满足途中栏"无码在途件"的收件条件 ⇒ 又被收进来
@@ -2104,8 +2138,27 @@ class MainActivity : Activity() {
                     q.optString("pickupCode").isNotBlank() ||
                             arriveHint.any { textOf(q).contains(it) }
 
+                /**
+                 * ★★ v1.4.10：**「已签收，待确认收货」= 用户还没取**，名单不许挡。
+                 *
+                 * 同志 2026-11-10 报「皇帝柑还没到，但在途快递看不到」。真机日志（12:07:49）：
+                 * ```
+                 * PddNative: 在途保留 261105-…：订单=「已签收，待确认收货」 shipping_status=1
+                 * ```
+                 * 这单在拼多多侧还是"待收货"，卡片上却留着上次补出来的取件码/驿站 ⇒
+                 * `atStation=true`、`stillRunning=false`（"待确认"不含运输中关键词）
+                 * ⇒ 被名单整张藏掉；而且它不会进下面的 runningParcels 计数（那里只认
+                 * stillRunning）⇒ **永远出不来**，连 3 轮自愈都轮不到。
+                 * 口径修正：只有"平台也认为已完结"（已取件/已签收且非待确认）才允许名单生效。
+                 */
+                fun waitingConfirm(q: org.json.JSONObject): Boolean {
+                    val t = textOf(q)
+                    return t.contains("待确认") || t.contains("待取") || t.contains("待收货")
+                }
+
                 val drop: (org.json.JSONObject) -> Boolean = { q ->
-                    !stillRunning(q) && atStation(q) && isPickupMuted(q.optString("src"), q, mutedNow)
+                    !stillRunning(q) && !waitingConfirm(q) && atStation(q) &&
+                            isPickupMuted(q.optString("src"), q, mutedNow)
                 }
                 val before = mergedTransit.size
                 mergedTransit.removeAll(drop)
@@ -2132,7 +2185,9 @@ class MainActivity : Activity() {
                 val runningParcels = ArrayList<Pair<String, org.json.JSONObject>>()
                 for (q in mergedTransit) {
                     val src = q.optString("src")
-                    if (stillRunning(q) && isPickupMuted(src, q, mutedNow)) {
+                    // ★ v1.4.10：把「待确认收货」也算作"还没取"—— 这类件被误加进名单时
+                    //   同样要能连续几轮后自动放出来，否则用户永远看不到自己的货。
+                    if ((stillRunning(q) || waitingConfirm(q)) && isPickupMuted(src, q, mutedNow)) {
                         runningParcels.add(src to q)
                     }
                 }
@@ -2209,6 +2264,10 @@ class MainActivity : Activity() {
         Log.i("TransitDebug", "testTransit=${testTransit.size} merged=${mergedTransit.size} all=${all.size} " +
                 "pdd=${pddTransit.size} jd=${jdTransit.size} mi=${miTransit.size} " +
                 "manual=${manualTransit.size} tb=${tbTransit.size} blacklist=${pickupMutedAll().size}")
+        // ★★ v1.4.10 诊断：最终上屏的这批到底是哪几单（对照 TransitBuild 的入参就能锁定丢在哪一步）
+        Log.i("TransitBuild", "最终 all=${all.size} 张：" + all.joinToString(",") {
+            it.optString("orderSn") + "/" + it.optString("waybillNo")
+        })
         if (shown.isEmpty()) {
             showStatusText(transitStatus)
             // ★ 秒显时空缓存（文件刚过期）别喊"暂无在途快递"—— 那是句结论，不是过程
@@ -4987,14 +5046,32 @@ class MainActivity : Activity() {
         // ---------- 主卡：取件码（0 件=占位；≥1 件=大数字 + 2×2 网格，最多 4 条） ----------
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         val pkgTime = prefs.getString(KEY_LAST_PKG_TIME, null)
-        val codeList = PddCodeStore.all(this).values
-            .filter { !PddCodeStore.isPicked(it) && it.code.isNotBlank() && !PddCodeStore.looksTaken(it) }
-            .sortedByDescending { it.ts }
-            // ★ vc605：同一取件码可能被两个来源各存一条（截图中 1-3-4021 出现两次）
-            //   ⇒ 按码去重，保留时间最新的那条
-            .distinctBy { it.code }
+        // ★★ v1.4.10：**首页网格与取件码页同源**（同志 2026-11-10 报「首页偶现有取件码但不显示，
+        //   要点开查看全部才看得到」）。
+        //   根因：首页读的是**持久缓存 [PddCodeStore]**，取件码页读的是**本轮实时合并出来的
+        //   pending**。两套数据各自过滤（首页还多一道 looksTaken），任一步骤错位（缓存码被
+        //   冲突清理搬走 / 文案被判已取走 / 补码只落到页面还没落盘）就会出现
+        //   「页面上有码，首页 0 件」。⇒ 首页优先用 [homePickupCodes]（renderMerged 发布），
+        //   只有它还没发布过（冷启动第一帧）才回落缓存。
+        val feed = homePickupCodes
+        /** 其中带「已标记取件」的数量 —— 只用于副标题说明，不影响码的显示 */
+        val feedPicked = feed?.count { it.picked } ?: 0
+        val codeList: List<PddCodeStore.Cached>
+        val feedRows: List<Pair<String, String>>
+        if (feed != null) {
+            codeList = emptyList()
+            feedRows = feed.map { it.code to it.station.ifBlank { "驿站待取" } }
+        } else {
+            codeList = PddCodeStore.all(this).values
+                .filter { !PddCodeStore.isPicked(it) && it.code.isNotBlank() && !PddCodeStore.looksTaken(it) }
+                .sortedByDescending { it.ts }
+                // ★ vc605：同一取件码可能被两个来源各存一条（截图中 1-3-4021 出现两次）
+                //   ⇒ 按码去重，保留时间最新的那条
+                .distinctBy { it.code }
+            feedRows = codeList.map { it.code to it.station.ifBlank { "驿站待取" } }
+        }
         // ★ vc584：条数只认缓存（清空缓存就该显示 0）；旧写法回退 SP 历史计数 ⇒ 清了还显示旧数字
-        val pkgCount = codeList.size
+        val pkgCount = feedRows.size
         val primary = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = homeCardBg()
@@ -5024,9 +5101,15 @@ class MainActivity : Activity() {
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = (UiTok.S4 * dp).toInt() })
         primary.addView(TextView(this).apply {
-            text = if (pkgTime != null && pkgCount > 0) "更新于 $pkgTime"
-                   else if (pkgCount > 0) "下拉取件码页可刷新"
-                   else "暂无待取件 · 点开查看全部"
+            // ★ v1.4.10：把「已标记取件」的数量写在副标题里 —— 码照常显示（同取件码页），
+            //   但不能让"3 件待取"和"其中 1 个我已经取过"这两件事互相打架。
+            text = when {
+                pkgCount == 0 -> "暂无待取件 · 点开查看全部"
+                feedPicked > 0 && pkgTime != null -> "更新于 $pkgTime · $feedPicked 个已标记取件"
+                feedPicked > 0 -> "$feedPicked 个已标记取件"
+                pkgTime != null -> "更新于 $pkgTime"
+                else -> "下拉取件码页可刷新"
+            }
             textSize = UiTok.T13
             setTextColor(cTextTertiary)
             maxLines = 1
@@ -5035,8 +5118,8 @@ class MainActivity : Activity() {
         ).apply { topMargin = (UiTok.S4 * dp).toInt() })
 
         // ★ 2×2 网格：最多 4 条，不缩字号（码 15sp / 驿站 12sp）；两排时卡片自然长高
-        if (codeList.isNotEmpty()) {
-            val shown = codeList.take(4)
+        if (feedRows.isNotEmpty()) {
+            val shown = feedRows.take(4)
             // ★ vc574：只画**需要的行**；不足 4 条时空位不画底色（首版留了半截灰块，像被截断）
             val rowsN = (shown.size + 1) / 2
             for (r in 0 until rowsN) {
@@ -5059,7 +5142,7 @@ class MainActivity : Activity() {
                         if (idx < shown.size) {
                             val it0 = shown[idx]
                             addView(TextView(this@MainActivity).apply {
-                                text = it0.code
+                                text = it0.first
                                 textSize = UiTok.T15
                                 typeface = tfMedium
                                 setTextColor(cTextPrimary)
@@ -5067,7 +5150,7 @@ class MainActivity : Activity() {
                                 ellipsize = android.text.TextUtils.TruncateAt.END
                             })
                             addView(TextView(this@MainActivity).apply {
-                                text = it0.station.ifBlank { "驿站待取" }
+                                text = it0.second
                                 textSize = UiTok.T12
                                 setTextColor(cTextTertiary)
                                 maxLines = 1
@@ -5088,8 +5171,8 @@ class MainActivity : Activity() {
         }
 
         // ★ 同志补充：≥5 条时网格只放得下 4 个，必须把“还有几件”提示出来
-        if (codeList.size > 4) {
-            val rest = codeList.size - 4
+        if (feedRows.size > 4) {
+            val rest = feedRows.size - 4
             primary.addView(TextView(this).apply {
                 text = "还有 $rest 件未显示 · 点「查看全部」查看"
                 textSize = UiTok.T13
@@ -10629,6 +10712,21 @@ class MainActivity : Activity() {
     /** 顶栏按钮的刷新回调（renderMerged 渲染完调一次） */
     private var pickupClearBtnRefresh: (() -> Unit)? = null
 
+    /** 首页网格里的一格 */
+    data class HomeCode(val code: String, val station: String, val picked: Boolean = false)
+
+    /**
+     * ★★ v1.4.10：**首页取件码网格的唯一数据源**。
+     *
+     * 由 [renderMerged] 在算完「这一屏到底显示哪些码」之后发布，
+     * null = 本轮还没渲染过（冷启动第一帧）⇒ 首页回落读持久缓存。
+     * 发布后用 [homeFeedFp] 比对，内容变了才重建首页 —— 否则每次源回调都重建，
+     * 首页会跟着闪。
+     */
+    @Volatile
+    private var homePickupCodes: List<HomeCode>? = null
+    private var homeFeedFp = ""
+
     private fun openPickup(mode: String = "all") {
         if (pickupLayer != null) return
         pickupPickedVisible = -1
@@ -10684,25 +10782,18 @@ class MainActivity : Activity() {
                             var del = 0
                             for ((k, c) in PddCodeStore.all(this)) {
                                 if (c.pickedAt != 0L) {
-                                    // ★★ v1.3.8：**一键清已取也必须写屏蔽名单**。
-                                    //   同志实测：长按删除不会让快递回到在途栏（因为写了名单），
-                                    //   而右上角「清已取」只删缓存、没写名单 ⇒ 这单退化成
-                                    //   "无码在途件"又被在途栏收回来。
-                                    // ★★ v1.4.9：改成**一条记录**（订单号/运单/码/驿站/标题一起存），
-                                    //   不再写三个扁平键 —— 取件码复用会误伤以后的新件。
-                                    MuteStore.addEntry(
-                                        this,
-                                        MuteStore.Entry(
-                                            id = "c" + System.currentTimeMillis() + "-" + del,
-                                            src = c.src,
-                                            orderSn = if (c.src == "pdd") k.substringAfter(':') else "",
-                                            waybill = c.waybill,
-                                            code = c.code,
-                                            station = c.station,
-                                            title = PddTitleStore.get(this, k.substringAfter(':')),
-                                            ts = System.currentTimeMillis()
-                                        )
-                                    )
+                                    // ★★ v1.4.10：**只删缓存，不再写黑名单**。
+                                    //
+                                    // 事故（同志 2026-11-10「皇帝柑还没到，在途看不到」）：
+                                    // v1.3.8~v1.4.9 这里把每条"已取件"都写成一条名单记录，
+                                    // 订单号身份又**永久有效** ⇒ 点一次「清已取 5」= 一次性把
+                                    // 5 个包裹永久屏蔽（连在途栏一起消失）。
+                                    // 而那批 pickedAt 里有系统误标的历史包袱（v1.4.8 之前的
+                                    // "没取件却显示已取件"），被屏蔽的正是还没到的货。
+                                    //
+                                    // 现在的口径：清已取 = 清掉这些标记过的**缓存**。
+                                    // 平台若还认为这单待取，下一轮抓取会重新出现 —— 那是对的，
+                                    // 说明确实没取。真要它永远消失，请长按那张卡删除（那才是用户明确意图）。
                                     PddCodeStore.remove(this, k)
                                     del++
                                 }
@@ -13047,6 +13138,28 @@ class MainActivity : Activity() {
             }
         }
         if (cache.isEmpty() && pending.isEmpty()) return
+        // ★★ v1.4.10：**摘掉"借来的码"**。
+        //   缓存里若某张卡的码，与另一张「已取件」记录的码相同 ⇒ 这枚码是那件取过的，
+        //   被 cabinet 接口错配过来了（同志 2026-11-10 12:22 报：卡上是昨天已取过的 114-4-9453，
+        //   他补了一句"快递是对的，所以是匹配出错"）。
+        //   处理：把这枚码从这张卡上摘掉，等补码链路重新取证 —— **宁可不显示码，
+        //   也不能给人一个到了驿站打不开柜的码**。
+        run {
+            val takenCodes = cache.values
+                .filter { it.pickedAt != 0L && it.code.isNotBlank() }
+                .map { it.code.trim() }.toHashSet()
+            if (takenCodes.isNotEmpty()) {
+                for ((k, c) in cache.entries.toList()) {
+                    if (c.pickedAt != 0L) continue
+                    val cd = c.code.trim()
+                    if (cd.isEmpty() || cd !in takenCodes) continue
+                    val fixed = c.copy(code = "")
+                    PddCodeStore.put(this, k, fixed)
+                    cache[k] = fixed
+                    Log.w("PddCodeMatch", "摘掉借来的码：$k ← $cd（这枚码属于已取件的那单）")
+                }
+            }
+        }
         // ★ vc270g：取件码唯一性清理 —— 一个码只能属于一个订单（驿站不会给两件同码）。
         //   两个订单报同一个码 = 抽取污染（页面级码元素被重复抠到，另一台设备实测：
         //   261013-624699676181159 与 261012-446525632021159 都被抓到 3-3-4013）。
@@ -13226,19 +13339,42 @@ class MainActivity : Activity() {
             val sn = key.substringAfter(':', key)
             val src = c.src.ifEmpty { key.substringBefore(':') }
             if (mutedNow.isNotEmpty()) {
-                val hitKey = "$src:$sn" in mutedNow
-                val hitId = listOf(sn, c.code, c.waybill).any { it.isNotBlank() && it in mutedNow }
-                if (hitKey || hitId) {
-                    Log.i("PickupCard", "回填跳过（黑名单）：$key code=${c.code}")
+                // ★★ v1.4.10：**改走记录制判据**（订单号永久 / 运单号 60 天 / 码 7 天且同驿站）。
+                //   旧写法把名单摊平成 Set 后 `listOf(sn, code, waybill).any { it in mutedNow }` ——
+                //   等于"取件码也参与匹配、且没有时效也没有驿站约束"，
+                //   格口码一被复用就把新件挡在门外（化妆品/皇帝柑那批都是这条路丢的）。
+                val hit = MuteStore.blocks(
+                    this, src,
+                    orderSn = if (src == "pdd") sn else "",
+                    waybill = c.waybill,
+                    code = c.code,
+                    station = c.station
+                )
+                if (hit != null) {
+                    Log.i(
+                        "PickupCard",
+                        "回填跳过（黑名单）：$key code=${c.code} ← 记录(${hit.src}/${hit.orderSn}/${hit.waybill}/${hit.code})"
+                    )
                     continue
                 }
             }
             // ★ vc609：缓存文案已经写着"已取走/已取件" ⇒ 这码是旧的，直接删缓存、不补卡
+            // ★★ v1.4.10：**但别只凭一句旧文案就把码删掉**。真机日志（12:07:47）：
+            //     `缓存文案=已取走，删除并跳过：pdd:261107-… ｜已取件2026-11-09 19:11:45 您的快件已领取`
+            //     而同一天平台侧这单还在「在驿站待取」—— 文案是上一轮（甚至串卡）留下的，
+            //     拿它判死就会把还要用的码删掉，观感就是"首页/页面上的码闪一下就没了"。
+            //   ⇒ 只有在**平台也查不到待取证据**时才采信这句文案。
             if (PddCodeStore.looksTaken(c)) {
-                Log.i("PddCache", "缓存文案=已取走，删除并跳过：$key｜${c.latest.take(40)}")
-                PddCodeStore.remove(this, key)
-                cache.remove(key)
-                continue
+                val st = PddChannel.lastTrackStatus[sn]
+                val platformWaiting = st != null && !PickupVerdict.enumSaysTaken(st)
+                if (platformWaiting) {
+                    Log.i("PddCache", "文案说已取走但平台仍报 $st ⇒ 保留这枚码：$key")
+                } else {
+                    Log.i("PddCache", "缓存文案=已取走，删除并跳过：$key｜${c.latest.take(40)}")
+                    PddCodeStore.remove(this, key)
+                    cache.remove(key)
+                    continue
+                }
             }
             // ★ vc343（同志 2026-10-20 反馈「重复的取件码」）：
             //   旧判据只认 orderSn/waybillNo —— 菜鸟卡的号在 `mailNo` 里，这两个字段都是空，
@@ -14118,6 +14254,32 @@ class MainActivity : Activity() {
             .ifEmpty { prevCached?.waybill.orEmpty() }
         val effCode = preferRealPddCode(prevCached?.code.orEmpty(), effWb, code)
         val station = preferRealPddStation(prevStation, place.take(60)).ifEmpty { prevStation }
+        // ★★ v1.4.10：**一枚码只属于一个包裹** —— 写码前先查这个码是不是已经有主了。
+        //   事故（同志 2026-11-10 12:22/12:23）：「114-4-9453 是昨天已经取过的快递」，
+        //   却挂到了今天这张「润唇膏」卡上；他补了一句「快递是对的，所以是匹配出错」——
+        //   对的，货没错，是码被错配了。
+        //   拼多多的 cabinet 接口对同一手机号/同一渠道的旧单会把**上一次的码**再回一次，
+        //   于是取过件的码又被贴到新单上。
+        //   判据：同码 + 同驿站（驿站不会给两件同码）⇒ 只认已有主；对方已取件的更是一票否决。
+        run {
+            val c = effCode.trim()
+            if (c.isNotEmpty()) {
+                val owner = PddCodeStore.all(this).entries.firstOrNull { (k, v) ->
+                    k != key && v.code.trim() == c && (
+                            v.pickedAt != 0L ||
+                                    (station.isNotEmpty() && v.station.trim() == station.trim())
+                            )
+                }
+                if (owner != null) {
+                    Log.w(
+                        "PddCodeMatch",
+                        "拒绝写码 $sn ← $c：这枚码属于 ${owner.key}" +
+                                "（${if (owner.value.pickedAt != 0L) "已取件" else "同驿站"}）"
+                    )
+                    return false
+                }
+            }
+        }
         if (key !in pickupMutedAll()) {
             PddCodeStore.put(
                 this, key, PddCodeStore.Cached(
@@ -14801,6 +14963,16 @@ class MainActivity : Activity() {
         //     的 W: 键负责（下一轮渲染就会跟菜鸟同运单卡合并），不靠上屏。
         val visible = ArrayList<JSONObject>()
         for (p in pending) {
+            // ★★ v1.4.10：**已标记取件的卡不再上屏**。
+            //   同志 2026-11-10 12:22：「取件码不对，这个取件码是昨天已经取过的快递」——
+            //   114-4-9453 是 11-09 19:11 取走的，因为"标记保留 24h"的设计还挂在栏里，
+            //   首页也跟着展示 ⇒ 用户会拿一个作废的码去驿站白跑。
+            //   标记动作的本意就是「这枚码用完了」⇒ 页面与首页都不再显示它。
+            //   缓存仍按 24h 自动过期清理（不在这里删，避免误标后码找不回来）。
+            if (p.optLong("pickedAt", 0L) != 0L) {
+                Log.i("PickupCard", "已标记取件，不上屏：${p.optString("src")} ${p.optString("pickupCode")}")
+                continue
+            }
             val bare = p.optString("src") == "pdd" &&
                     p.optString("pickupCode").isEmpty() &&
                     p.optString("goodsName").isEmpty() &&
@@ -14827,6 +14999,40 @@ class MainActivity : Activity() {
             .putInt(KEY_LAST_PKG_COUNT, activeCount)
             .putString(KEY_LAST_PKG_TIME, now)
             .apply()
+        // ★★ v1.4.10：把「这一屏真正显示的待取码」发布给首页 —— 首页网格从此与本页同源。
+        //   这是「首页偶现有码却不显示、要点查看全部才看得到」的根治点：
+        //   以前首页自己翻持久缓存（还可能被 looksTaken / 冲突清理 / 补码没落盘挡住），
+        //   跟本页看到的根本不是同一份数据。
+        run {
+            val feedNow = ArrayList<HomeCode>()
+            val seen = HashSet<String>()
+            for (p in visible) {
+                // ★★ v1.4.10：**只要还没取的码**（同志 12:22：首页那个 114-4-9453
+                //   是昨天已经取过的件）。已标记取件的码从此不进首页、也不进取件码页。
+                if (p.optLong("pickedAt", 0L) != 0L) continue
+                val code = p.optString("pickupCode").trim()
+                if (code.isEmpty() || !seen.add(code)) continue
+                val st = p.optString("stationText")
+                    .ifEmpty { p.optString("stationName") }
+                    .ifEmpty { p.optString("nickName") }.trim()
+                // ★★ v1.4.10：**已标记取件的码也一起发布**（[HomeCode.picked] 单独记）。
+                //   一开始这里过滤掉 pickedAt≠0，结果首页直接变「0 件待取」，而页面上明明还有码
+                //   —— 同志要的是"页面看得到的码，首页也看得到"。
+                //   已标记的只影响副标题说明，不再让整个码从首页消失。
+                feedNow.add(HomeCode(code, st, p.optLong("pickedAt", 0L) != 0L))
+            }
+            val fp = feedNow.joinToString("|") { "${it.code}/${it.station}/${it.picked}" }
+            if (fp != homeFeedFp) {
+                homeFeedFp = fp
+                homePickupCodes = feedNow
+                Log.i(
+                    "HomeFeed",
+                    "首页取件码同步 ${feedNow.size} 个（已标记 ${feedNow.count { it.picked }}）：" +
+                            feedNow.joinToString(",") { it.code }
+                )
+                mainHandler.post { runCatching { rebuildHome() } }
+            }
+        }
         // 顺手把取件码推给桌面小组件
         publishWidgetCodes(pending)
         // 后台快递跟踪：把本次抓到的全量包裹写成基线快照（TrackWorker 靠它判断"有没有变化"）
