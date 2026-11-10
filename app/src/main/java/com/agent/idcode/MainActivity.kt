@@ -1062,30 +1062,37 @@ class MainActivity : Activity() {
         next(0)
     }
 
-    /** 增强结果写回对应卡（waybillNo=真实运单号、latest=轨迹、lines=vc219 全程轨迹行）并重刷；主线程调用 */
+    /** 增强结果写回对应卡（realWaybill=真实运单号、latest=轨迹、lines=vc219 全程轨迹行）并重刷；主线程调用 */
     private fun applyTransitTrace(
         gen: Int, orderSn: String, waybill: String, latest: String, lines: String = ""
     ): Boolean {
         if (gen != transitEnhanceGen || transitLayer == null) return false
-        // ★★ v1.4.5：**没有有效运单号就绝不写主键** —— 这是「11 件在途塌成 1 件」的源头。
-        //   以前无条件 `pkg.put("waybillNo", waybill)`，而 `waybillNo` 同时是这张卡的
-        //   **跨源去重主键**：物流页解析失败 / 缓存里存的是 "null"·"暂无"·"" 时，
-        //   一批卡的主键被涂成同一个值 ⇒ `跨源去重 11 → 1（合并 10 条）` ⇒ 界面只剩 1 张。
-        //   v1.4.4 是在去重之后加「塌缩就放弃去重」兜底，这里是从源头堵住身份污染。
+        // ★★ v1.4.6：**再也不把真运单号写进 `waybillNo`** —— 这是「在途 9 件塌成 1 件」的真正根因。
+        //
+        //   这套子系统（含 [enhancePddTransitTraces] 的 targets、[applyTransitTrace] 的匹配键、
+        //   `pddTransit.firstOrNull { it.optString("waybillNo") == sn }` 的查找）**都把
+        //   `waybillNo` 当成订单号在用**（建卡时 put 的就是 t.orderSn）。
+        //   v1.4.5 及以前这里无条件 `pkg.put("waybillNo", waybill)` ⇒
+        //     · 卡片的身份键被就地改写成"某一次"解析到的真运单号；
+        //     · 真机日志实证：9 张卡 orderSn 各不相同，`waybillNo` 却被涂成同一个
+        //       `79157444920500` ⇒ dedupKey 全等于 `W:79157444920500` ⇒ 整批并成 1 张；
+        //     · 而 `waybillNo` 一旦不等订单号，`firstOrNull { waybillNo == sn }` 就再也找不到卡，
+        //       下一轮拿到空的 phone/realWaybill，于是越补越歪。
+        //   真运单号本来就该住在 `realWaybill` 里 —— 展示侧普遍是
+        //   `optString("realWaybill").ifEmpty { optString("waybillNo") }`，改写后照样显示真号。
         val wb = waybill.trim()
         val okWb = validNo(wb)
-        if (!okWb) {
-            Log.w("TransitEnhance", "$orderSn 运单号无效(\"$wb\")，不写回主键，只补轨迹")
+        if (!okWb && wb.isNotEmpty()) {
+            Log.w("TransitEnhance", "$orderSn 运单号无效(\"$wb\")，只补轨迹")
         }
         var hit = false
         for (pkg in pddTransit) {
-            if (pkg.optString("waybillNo") == orderSn) {
-                if (okWb) {
-                    pkg.put("waybillNo", wb)
-                    if (pkg.optString("realWaybill").isEmpty()) pkg.put("realWaybill", wb)
-                }
-                // 订单号占位始终补齐：waybillNo 飘走之后，parcelIds/pickKey 还能靠它认人
+            val match = pkg.optString("orderSn").ifEmpty { pkg.optString("waybillNo") } == orderSn
+            if (match) {
+                // 订单号锚点：身份只认它，永不改写
                 if (!validNo(pkg.optString("orderSn"))) pkg.put("orderSn", orderSn)
+                // 真运单号写进 realWaybill（已有值就不覆盖，订单列表接口给的更可信）
+                if (okWb && pkg.optString("realWaybill").isEmpty()) pkg.put("realWaybill", wb)
                 pkg.put("latest", latest)
                 if (lines.isNotEmpty()) pkg.put("traceLines", lines)
                 hit = true
@@ -13308,11 +13315,19 @@ class MainActivity : Activity() {
 
     /** 跨源唯一键；返回 `U:` 开头的表示「没有可比对键」⇒ 永远各自保留 */
     private fun dedupKey(p: JSONObject): String {
-        // ① 运单号（主字段 → 真运单号字段），二者都必须过 validNo 才算数
-        val waybill = p.optString("waybillNo").ifEmpty { p.optString("mailNo") }
-        if (validNo(waybill)) return "W:" + normNo(waybill)
-        val real = p.optString("realWaybill")
-        if (validNo(real)) return "W:" + normNo(real)
+        val src = p.optString("src")
+        // ① 运单号（都必须是**有效号**才算数）
+        if (src == "pdd") {
+            // ★★ v1.4.6：拼多多卡的 `waybillNo` 存的是**订单号**（建卡时 put 的就是 t.orderSn），
+            //   真运单号在 `realWaybill`。跨源合并要用真运单号，所以 pdd 先看 realWaybill。
+            val real = p.optString("realWaybill")
+            if (validNo(real)) return "W:" + normNo(real)
+        } else {
+            val waybill = p.optString("waybillNo").ifEmpty { p.optString("mailNo") }
+            if (validNo(waybill)) return "W:" + normNo(waybill)
+            val real = p.optString("realWaybill")
+            if (validNo(real)) return "W:" + normNo(real)
+        }
         // ② 取件码 + 驿站（只比码不安全：不同驿站完全可能复用同一个格口码）
         val code = p.optString("pickupCode")
         if (validNo(code)) {
@@ -13320,7 +13335,6 @@ class MainActivity : Activity() {
             if (st.isNotEmpty()) return "C:" + normNo(code) + ":" + st.take(20)
         }
         // ③ 各源自己的稳定标识
-        val src = p.optString("src")
         val own = when (src) {
             "pdd" -> p.optString("orderSn")
             "cainiao" -> cainiaoKey(p)
@@ -13393,7 +13407,24 @@ class MainActivity : Activity() {
                     .ifEmpty { old.optString("nickName") }.trim()
                 station.isEmpty() || oldStation.isEmpty() || normNo(station) == normNo(oldStation)
             }
-            val k = codeMatch?.key ?: dedupKey(p)
+            var k = codeMatch?.key ?: dedupKey(p)
+            // ★★ v1.4.6：**同源、订单号不同 ⇒ 绝不是同一件，绝不合并**。
+            //   跨源去重的本意是「同一件被两个源各抓一次」；**同一个源里的两张卡必然是两个包裹**
+            //   （一个源不会把同一件抓成两张）。所以同源 + 不同 orderSn 时强制拆键。
+            //   真机实证（2026-11-10 10:09:43）：9 张 pdd 卡 orderSn 各不相同，`waybillNo`
+            //   却被上游涂成同一个真运单号 ⇒ 若只靠运单号做键，9 件会被并成 1 件。
+            //   这道闸让"上游字段被写脏"不再等于"包裹消失"（宁可重复显示，不可整批消失）。
+            if (codeMatch == null) {
+                val clash = byKey[k]
+                if (clash != null && clash.optString("src") == p.optString("src")) {
+                    val a = clash.optString("orderSn")
+                    val b = p.optString("orderSn")
+                    if (validNo(a) && validNo(b) && a != b) {
+                        k = "$k#sn:" + normNo(b)
+                        Log.w("Dedup", "同源不同单号，拒绝合并：${p.optString("src")} $b（键与本单 $a 相同）")
+                    }
+                }
+            }
             val prev = codeMatch?.value ?: byKey[k]
             if (prev == null) {
                 byKey[k] = p

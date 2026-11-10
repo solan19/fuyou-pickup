@@ -192,19 +192,22 @@ android {
         // ★★ vc690：同志定 —— 对外版本 **1.2**，内部 versionCode **690**（紧接着历史的 682 往上）。
         //   以后每版在 690 基础上 +1；任何 ≤689 的旧包都无法覆盖安装。
         // ★★ vc691/692 → 对外 **1.2.5**，内部 **691**（同志 2026-11-04 14:44 要求提版本）。
-        // v1.4.5：★★ 在途快递 11 件塌成 1 件的根因修复（不是兜底，是堵源头）：
-        //   ① dedupKey：加 validNo() 闸 —— optString() 读到 JSON null 返回**字符串 "null"**
-        //      （不是空串，isNotEmpty()=true），加上 normNo() 会把 "-" / "—" / "(无)" 滤成空串
-        //      ⇒ 缺号的卡全拿到同一个键 `W:NULL` / `W:` ⇒ 整批并成一张。
-        //      parcelIds() 早就防过 "null"，dedupKey 一直漏着同一道闸。
-        //   ② dedupKey 增加 realWaybill 兜底（订单列表自带的真运单号）。
-        //   ③ applyTransitTrace：**无效运单号绝不写回 waybillNo** —— waybillNo 同时是跨源去重主键，
-        //      以前无条件覆盖，一批卡的主键被涂成同值，这是身份污染的源头。
-        //   ④ 拼多多在途卡补 put("orderSn")：waybillNo 被改成真运单号后仍有稳定锚点。
-        //   ⑤ TransitTerminal「豁免」日志字段名修正（sn/waybill → orderSn/waybillNo，
-        //      原来永远打空，导致排查时误判成"标识全空"）。
-        versionCode = 724
-        versionName = "1.4.5"
+        // v1.4.5：dedupKey 补 validNo() 闸（optString 读到 JSON null 返回字符串 "null"、
+        //         normNo 会把 "-"/"—"/"(无)" 滤成空串，两种退化都会让缺号的卡共用同一个键）；
+        //         在途卡补 put("orderSn") 稳定锚点；TransitTerminal 豁免日志字段名修正。
+        // v1.4.6：★★ 在途 9 件塌成 1 件的**真正根因**修复 ——
+        //   整套补轨迹子系统（enhancePddTransitTraces 的 targets、applyTransitTrace 的匹配键、
+        //   `firstOrNull { waybillNo == sn }` 的查找）都把 `waybillNo` 当**订单号**在用，
+        //   而 applyTransitTrace 却把它就地改写成真运单号 ⇒ 身份被整体污染。
+        //   真机日志实证（2026-11-10 10:09:43）：9 张卡 orderSn 各不相同，
+        //   `waybillNo` 却全被涂成同一个 `79157444920500` ⇒ dedupKey 全等于 W:791... ⇒ 9 并成 1。
+        //   ① applyTransitTrace：真运单号只写 `realWaybill`，**永不改写 `waybillNo`**；
+        //      匹配键改「orderSn 优先，waybillNo 兜底」，让 firstOrNull 查找不再失效。
+        //   ② dedupKey：pdd 卡先看 realWaybill（真号）、再退 orderSn，不再拿订单号当运单号比。
+        //   ③ dedupPkgs：**同源、orderSn 不同 ⇒ 绝不合并**（一个源不会把同一件抓成两张），
+        //      上游字段被写脏时不再等于"包裹消失"。
+        versionCode = 725
+        versionName = "1.4.6"
     }
 
     buildTypes {
