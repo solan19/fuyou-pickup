@@ -12295,56 +12295,61 @@ class MainActivity : Activity() {
                 "通知使用权用于从通知里抓取件码；电池优化白名单与特殊权限用于后台保活。"
             ))
             // ① 通知使用权（系统「通知使用权」列表页）
-            // ★ vc707：竖排容器 —— 每个入口独占一行，与其它卡的行节奏一致
+            // ★★ v1.4.17：这一整卡原来有个通病 —— **点了没反应**。三处根因：
+            //   · 通知使用权：跳转失败只打日志（除第一个 catch 外没有 toast）；
+            //   · 电池优化白名单：`if (batteryExempt()) return` —— 已加入后彻底静默；
+            //   · 一键申请：通知已开时就直奔电池，电池也已加入 ⇒ 一路 return。
+            //   现在每行点下去都有 toast + 状态文字刷新，不再出现"点了没动静"。
             val permRow1 = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
             }
-            val btnNotifyListener: View = trackRow(
-                "通知使用权",
-                TextView(this).apply {
-                    text = if (notifListenerGranted()) "已开启" else "去系统设置 ›"
-                    textSize = 13f
-                    setTextColor(if (notifListenerGranted()) cTextSecondary else cTextTertiary)
-                }
-            ) {
-                try {
-                    startActivity(Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
-                } catch (t: Throwable) {
-                    SafeRun.w("MainActivity", t)
-                    appToast(this, "打不开通知使用权设置")
-                }
+            val tvNotifyStatus = TextView(this).apply {
+                text = if (notifListenerGranted()) "已开启" else "去系统设置 ›"
+                textSize = 13f
+                setTextColor(if (notifListenerGranted()) cTextSecondary else cTextTertiary)
+            }
+            val btnNotifyListener: View = trackRow("通知使用权", tvNotifyStatus) {
+                val ok = openFirst(Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                appToast(
+                    this,
+                    if (ok) "在列表里找到本应用，勾选「允许通知使用权」" else "打不开通知使用权设置",
+                    true
+                )
+                mainHandler.postDelayed(
+                    { refreshPermRowTexts(tvNotifyStatus, null, null) }, 1_200L
+                )
             }
             permRow1.addView(btnNotifyListener, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ))
             // ② 电池优化白名单（部分 ROM 不认 ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS ⇒ 退回列表页）
-            val btnBatteryOpt: View = trackRow(
-                "电池优化白名单",
-                TextView(this).apply {
-                    text = if (batteryExempt()) "已加入" else "去添加 ›"
-                    textSize = 13f
-                    setTextColor(if (batteryExempt()) cTextSecondary else cTextTertiary)
+            // ★★ v1.4.17：**已加入时不再静默返回**。旧代码第一行 `if (batteryExempt()) return`
+            //   就结束了，用户点的是一张「已加入」的行 —— 一个像素的反馈都没有，看起来就是坏的。
+            //   现在改成打开系统「电池优化」列表页（可以核对，也能把本应用移出去重加），并给 toast。
+            val tvBattStatus = TextView(this).apply {
+                text = if (batteryExempt()) "已加入" else "去添加 ›"
+                textSize = 13f
+                setTextColor(if (batteryExempt()) cTextSecondary else cTextTertiary)
+            }
+            val btnBatteryOpt: View = trackRow("电池优化白名单", tvBattStatus) {
+                Log.i("Perm", "点电池优化白名单：当前已加入=${batteryExempt()}")
+                if (batteryExempt()) {
+                    val ok = openFirst(
+                        Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
+                        Intent(android.provider.Settings.ACTION_BATTERY_SAVER_SETTINGS),
+                        appDetailsIntent()
+                    )
+                    appToast(
+                        this,
+                        if (ok) "已在白名单中，已打开系统列表供核对" else "已在白名单中（系统列表打不开）",
+                        true
+                    )
+                } else {
+                    requestBatteryExemption()
                 }
-            ) {
-                var opened = false
-                try {
-                    startActivity(Intent(
-                        android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                        Uri.parse("package:$packageName")
-                    ))
-                    opened = true
-                } catch (t: Throwable) {
-                    SafeRun.w("MainActivity", t)
-                }
-                if (!opened) {
-                    try {
-                        startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-                        opened = true
-                    } catch (t: Throwable) {
-                        SafeRun.w("MainActivity", t)
-                    }
-                }
-                if (!opened) appToast(this, "打不开电池优化设置")
+                mainHandler.postDelayed(
+                    { refreshPermRowTexts(null, tvBattStatus, null) }, 1_200L
+                )
             }
             permRow1.addView(btnBatteryOpt, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -12352,49 +12357,28 @@ class MainActivity : Activity() {
             permCard.addView(permRow1, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { topMargin = (UiTok.S4 * dp).toInt() })
-            // ③ 特殊应用权限 / 后台运行（文案长，单独一行放，免得和上面两个挤一行被裁掉）
-            // ★ vc707：竖排容器（同上）
+            // ③ 后台运行 / 自启动（文案长，单独一行放，免得和上面两个挤一行被裁掉）
+            // ★★ v1.4.17：**原来跳的是悬浮窗权限** —— ACTION_MANAGE_OVERLAY_PERMISSION 是
+            //   「显示在其他应用上层」，而本应用连 SYSTEM_ALERT_WINDOW 都没在 Manifest 里声明，
+            //   跳过去是一页跟后台保活毫无关系的设置（同志报"后台运行权限跳转的是悬浮窗权限"）。
+            //   现在按 ROM 找真正的自启动管理页：ColorOS/一加 → MIUI → 华为/荣耀 → vivo → 三星，
+            //   全部不认时由 romAutoStartIntents() 末尾兜到「应用信息」页（那里能进电池/自启动）。
             val permRow2 = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
             }
             val btnSpecialAccess: View = trackRow(
-                "特殊应用权限 / 后台运行",
+                "后台运行 / 自启动",
                 TextView(this).apply {
                     text = "去系统设置 ›"
                     textSize = 13f
                     setTextColor(cTextTertiary)
                 }
             ) {
-                var opened = false
-                try {
-                    startActivity(Intent(
-                        android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:$packageName")
-                    ))
-                    opened = true
-                } catch (t: Throwable) {
-                    SafeRun.w("MainActivity", t)
+                when (openAutoStartPage()) {
+                    "startup" -> appToast(this, "在「自启动」列表里找到本应用并允许", true)
+                    "details" -> appToast(this, "进「耗电管理」→ 选「允许后台活动」", true)
+                    else -> appToast(this, "打不开系统设置，请在系统设置里手动允许后台运行", true)
                 }
-                if (!opened) {
-                    try {
-                        startActivity(Intent(
-                            "android.settings.APPLICATION_DETAILS_SETTINGS",
-                            Uri.parse("package:$packageName")
-                        ))
-                        opened = true
-                    } catch (t: Throwable) {
-                        SafeRun.w("MainActivity", t)
-                    }
-                }
-                if (!opened) {
-                    try {
-                        startActivity(Intent(android.provider.Settings.ACTION_SETTINGS))
-                        opened = true
-                    } catch (t: Throwable) {
-                        SafeRun.w("MainActivity", t)
-                    }
-                }
-                if (!opened) appToast(this, "打不开特殊权限设置")
             }
             permRow2.addView(btnSpecialAccess, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -12408,10 +12392,12 @@ class MainActivity : Activity() {
             permCard.addView(permStatus, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { topMargin = (UiTok.S4 * dp).toInt() })
+            // ★★ v1.4.17：文案从"通知 + 电池白名单"改成三项 —— 一键申请现在真的会把
+            //   通知使用权（从通知抓取件码的关键）也纳进体检，见 requestCorePermissions()。
             val btnRequestCore: View = trackRow(
                 "一键申请权限",
                 TextView(this).apply {
-                    text = "通知 + 电池白名单"
+                    text = "通知 + 电池 + 通知使用权"
                     textSize = 13f
                     setTextColor(cTextTertiary)
                 }
@@ -12420,7 +12406,9 @@ class MainActivity : Activity() {
                     getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                         .putLong("perm_prompt_at", System.currentTimeMillis()).apply()
                     requestCorePermissions()
-                    mainHandler.postDelayed({ permStatus.text = permStatusLine() }, 2_500L)
+                    mainHandler.postDelayed(
+                        { refreshPermRowTexts(tvNotifyStatus, tvBattStatus, permStatus) }, 2_500L
+                    )
                 } catch (t: Throwable) {
                     SafeRun.w("Perm", t)
                 }
@@ -16796,9 +16784,26 @@ class MainActivity : Activity() {
         false
     }
 
-    /** 弹系统「电池优化白名单」对话框（Manifest 已声明 REQUEST_IGNORE_BATTERY_OPTIMIZATIONS） */
+    /**
+     * 弹系统「电池优化白名单」对话框（Manifest 已声明 REQUEST_IGNORE_BATTERY_OPTIMIZATIONS）。
+     *
+     * ★★ v1.4.17：**已加入时不再静默 return** —— 直接开系统电池优化列表页供核对，
+     *   否则用户点「电池优化白名单」看到的是"完全没反应"（同志报的第二个无效项）。
+     */
     private fun requestBatteryExemption() {
-        if (batteryExempt()) return
+        if (batteryExempt()) {
+            val ok = openFirst(
+                Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
+                Intent(android.provider.Settings.ACTION_BATTERY_SAVER_SETTINGS),
+                appDetailsIntent()
+            )
+            appToast(
+                this,
+                if (ok) "已在白名单中，已打开系统列表供核对" else "已在白名单中（系统列表打不开）",
+                true
+            )
+            return
+        }
         var opened = false
         try {
             startActivity(Intent(
@@ -16806,7 +16811,9 @@ class MainActivity : Activity() {
                 Uri.parse("package:$packageName")
             ))
             opened = true
+            Log.i("Perm", "电池优化对话框已弹出（ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS）")
         } catch (t: Throwable) {
+            Log.w("Perm", "电池优化对话框打不开：${t.javaClass.simpleName}，改试列表页")
             SafeRun.w("Perm", t)
         }
         if (!opened) {
@@ -16820,15 +16827,51 @@ class MainActivity : Activity() {
         if (!opened) appToast(this, "打不开电池优化设置")
     }
 
-    /** 一键申请：通知 → 电池白名单（两个系统对话框不能同时弹，只能串起来） */
+    /**
+     * 一键申请：通知 → 电池白名单 → 通知使用权，**缺什么补什么，每次点击都有反馈**。
+     *
+     * ★★ v1.4.17：旧实现是「通知缺 ⇒ 弹；否则直接弹电池」，两个都已达标时**一路 return**，
+     *   点击等于没反应（同志报的"一键申请权限点击无效"）。
+     *   另外它从来没有管过「通知使用权」—— 那才是从通知里抓取件码的关键一项。
+     *
+     * 一次点击只能推进一项：运行时权限框、电池对话框、通知使用权列表页三者不能同时出，
+     * 且跳系统页会离开 App（没有可靠的"回来了"回调）。所以每次都用 toast 报清**还剩哪几项**，
+     * 用户再点一次继续。
+     */
     private fun requestCorePermissions() {
-        autoPermFlow = true
-        if (!notifGranted()) {
+        val missNotif = !notifGranted()
+        val missBatt = !batteryExempt()
+        val missListener = !notifListenerGranted()
+        Log.i("Perm", "一键申请：通知缺=$missNotif 电池缺=$missBatt 通知使用权缺=$missListener")
+        if (!missNotif && !missBatt && !missListener) {
+            appToast(this, "权限已齐全：通知、电池白名单、通知使用权均已开启", true)
+            refreshSettingsIfOpen()
+            return
+        }
+        if (missNotif) {
+            // 通知是运行时权限，必须当前 Activity 在前台弹；回调里会接着弹电池（autoPermFlow）
+            autoPermFlow = true
             requestNotifPermission()
             return
         }
+        if (missBatt) {
+            autoPermFlow = false
+            requestBatteryExemption()
+            appToast(
+                this,
+                if (missListener) "还剩「通知使用权」未开，回来后再点一次" else "请在弹出的系统对话框里选「允许」",
+                true
+            )
+            return
+        }
+        // 只剩通知使用权：跳系统列表页
         autoPermFlow = false
-        requestBatteryExemption()
+        val ok = openFirst(Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        appToast(
+            this,
+            if (ok) "在列表里找到本应用，勾选「允许通知使用权」" else "打不开通知使用权设置",
+            true
+        )
     }
 
     /** 启动时自动弹一次；3 天内弹过就跳过（设置页仍有手动入口） */
@@ -16850,6 +16893,132 @@ class MainActivity : Activity() {
             SafeRun.w("Perm", t)
         }
     }
+
+    /**
+     * ★★ v1.4.17：刷新「权限与保活」卡上三处状态文字（不重建整页，避免滚动位置丢失）。
+     * 传 null 的项跳过。
+     */
+    private fun refreshPermRowTexts(
+        notifyRow: TextView?, battRow: TextView?, statusLine: TextView?
+    ) {
+        try {
+            notifyRow?.let {
+                val ok = notifListenerGranted()
+                it.text = if (ok) "已开启" else "去系统设置 ›"
+                it.setTextColor(if (ok) cTextSecondary else cTextTertiary)
+            }
+            battRow?.let {
+                val ok = batteryExempt()
+                it.text = if (ok) "已加入" else "去添加 ›"
+                it.setTextColor(if (ok) cTextSecondary else cTextTertiary)
+            }
+            statusLine?.text = permStatusLine()
+        } catch (t: Throwable) {
+            SafeRun.w("Perm", t)
+        }
+    }
+
+    // ---------------- ★★ v1.4.17：系统页跳转（后台保活三件套） ----------------
+
+    /**
+     * 依次尝试多个 Intent，任一成功即 `true`；全失败返回 `false`（异常不外抛）。
+     *
+     * 为什么要一次性试一串：各 ROM（ColorOS / MIUI / 华为 / vivo / 三星）的后台管理页
+     * 组件名完全不同，且系统升级会改名。逐个 try 比 `resolveActivity` 可靠 ——
+     * Android 11+ 的包可见性限制会让 `resolveActivity` 对未在 `<queries>` 声明的包直接返回 null，
+     * 而显式组分跳转本身仍可成功。
+     */
+    private fun openFirst(vararg intents: Intent): Boolean {
+        for (it in intents) {
+            val tag = it.action ?: it.component?.flattenToShortString() ?: "?"
+            try {
+                startActivity(it)
+                Log.i("Perm", "系统页跳转成功：$tag")
+                return true
+            } catch (t: Throwable) {
+                Log.w("Perm", "系统页跳转失败：$tag → ${t.javaClass.simpleName}")
+            }
+        }
+        return false
+    }
+
+    /** 本应用的「应用信息」页 —— 各家 ROM 的电池／自启动入口都挂在里面，万能兜底 */
+    private fun appDetailsIntent(): Intent = Intent(
+        android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+        Uri.parse("package:$packageName")
+    )
+
+    /**
+     * 「后台运行 / 自启动」该跳的地方 —— 返回落点标识，调用方据此给不同提示：
+     *
+     * | 返回 | 落在哪 | 用户下一步 |
+     * |---|---|---|
+     * | `"startup"` | 各家 ROM 的自启动管理页 | 在列表里找到本应用，打开开关 |
+     * | `"details"` | 应用详情页（里面有「耗电管理」） | 进「耗电管理」→「允许后台活动」 |
+     * | `""` | 全失败 | 只能手动翻系统设置 |
+     *
+     * ★★ v1.4.17：原来是 `ACTION_MANAGE_OVERLAY_PERMISSION` —— 那是**悬浮窗**权限，
+     * 而本应用根本没有 `SYSTEM_ALERT_WINDOW`，跳过去是一页「显示在其他应用上层」，
+     * 与"后台能不能活"完全无关（同志报的第三项）。
+     *
+     * ★ v1.4.17 真机踩坑（一加 PJZ110 / ColorOS，Android 17）：
+     * 显式组分 `com.oplus.battery/com.oplus.startupapp.view.StartupAppListActivity`
+     * 在 App 内被 **SecurityException** 拦掉（该 Activity 未导出，`adb shell am start`
+     * 以 shell 身份能过、普通应用不行 —— 所以"命令行能跳"不等于"App 能跳"）。
+     * 而它同时声明了 intent-filter `com.oplus.battery.permission.startup.StartupAppListActivity`，
+     * 隐式 action 交给系统解析有机会放行，因此隐式排在显式之前。
+     */
+    private fun openAutoStartPage(): String {
+        val tagged = ArrayList<Pair<String, Intent>>()
+        // ① 隐式 action（ColorOS 自启动页对外声明的入口）
+        tagged.add("startup" to Intent("com.oplus.battery.permission.startup.StartupAppListActivity")
+            .addCategory(Intent.CATEGORY_DEFAULT))
+        tagged.add("startup" to Intent("com.oplus.battery.permission.startup.LaunchRecordActivity")
+            .addCategory(Intent.CATEGORY_DEFAULT))
+        tagged.add("startup" to Intent("safe.intent.action.OPT_AUTO_APP_ACTIVITY")
+            .addCategory(Intent.CATEGORY_DEFAULT))
+        // ② 显式组分（各家 ROM）
+        for (c in ROM_AUTOSTART_COMPS) {
+            val cn = android.content.ComponentName.unflattenFromString(c) ?: continue
+            tagged.add("startup" to Intent().apply { component = cn })
+        }
+        // ③ 兜底：应用详情页（ColorOS 的「耗电管理 → 允许后台活动」在里面）
+        tagged.add("details" to appDetailsIntent())
+
+        for ((tag, it) in tagged) {
+            val desc = it.action ?: it.component?.flattenToShortString() ?: "?"
+            try {
+                startActivity(it)
+                Log.i("Perm", "后台管理页跳转成功（落点=$tag）：$desc")
+                return tag
+            } catch (t: Throwable) {
+                Log.w("Perm", "后台管理页跳转失败：$desc → ${t.javaClass.simpleName}")
+            }
+        }
+        return ""
+    }
+
+    /** 各家 ROM 的自启动管理页组分（按厂商顺序，末尾由 [openAutoStartPage] 兜应用详情页） */
+    private val ROM_AUTOSTART_COMPS = listOf(
+        // ColorOS / 一加 / realme
+        "com.oplus.battery/com.oplus.startupapp.view.StartupAppListActivity",
+        "com.coloros.safecenter/com.coloros.safecenter.permission.startup.StartupAppListActivity",
+        "com.coloros.safecenter/com.coloros.safecenter.startupapp.StartupAppListActivity",
+        "com.coloros.phonemanager/com.coloros.phonemanager.permission.startup.StartupAppListActivity",
+        "com.oplus.safecenter/com.oplus.safecenter.permission.startup.StartupAppListActivity",
+        // MIUI / 澎湃
+        "com.miui.securitycenter/com.miui.permcenter.autostart.AutoStartManagementActivity",
+        // 华为 / 荣耀
+        "com.huawei.systemmanager/com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity",
+        "com.hihonor.systemmanager/com.hihonor.systemmanager.startupmgr.ui.StartupNormalAppListActivity",
+        // vivo / iQOO
+        "com.vivo.permissionmanager/com.vivo.permissionmanager.activity.BgStartUpManagerActivity",
+        "com.iqoo.secure/com.iqoo.secure.ui.phoneoptimize.BgStartUpManager",
+        // 三星
+        "com.samsung.android.lool/com.samsung.android.sm.ui.battery.BatteryActivity",
+        // 原生「不受限制」电池优化列表
+        "com.android.settings/com.android.settings.Settings\$HighPowerApplicationsActivity"
+    )
 
     /** 「权限与保活」卡上的状态行 */
     private fun permStatusLine(): String {

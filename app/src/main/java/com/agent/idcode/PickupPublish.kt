@@ -23,13 +23,16 @@ object PickupPublish {
     /** 上一次发布出去（= 用户可见）的码集合，用来判断"哪些是新到的" */
     private const val KEY_LAST_CODES = "publish_last_codes"
 
-    /** 数据源：PddCodeStore 里所有「有码且未取件」的条目（与第 4 栏、流体云同一口径） */
-    private fun pendingOf(ctx: Context): List<PddCodeStore.Cached> = try {
-        PddCodeStore.all(ctx).values.filter { it.code.isNotBlank() && it.pickedAt == 0L }
-    } catch (t: Throwable) {
-        SafeRun.w(TAG, t)
-        emptyList()
-    }
+    /**
+     * 数据源：`PddCodeStore` 里**仍然有效**的条目。
+     *
+     * ★★ v1.4.18：改走 [PickupGate.aliveEntries] —— 原来只判「有码 + 未取件」，
+     * **没有过黑名单**，于是「清已取 / 长按删除」掉的码照样被推上流体云、写进小组件、
+     * 还可能再弹一条通知（同志 14:36：流体云显示 3 件，实际只有 1 个取件码）。
+     * 现在整个 App 只有这一个「哪些码该发布」的出口。
+     */
+    private fun pendingOf(ctx: Context): List<PddCodeStore.Cached> =
+        PickupGate.aliveEntries(ctx).map { it.second }
 
     /**
      * 发布一次。

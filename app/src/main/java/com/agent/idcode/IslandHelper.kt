@@ -179,6 +179,16 @@ object IslandHelper {
         val want = entries
             .filter { it.no.isNotBlank() && it.code.isNotBlank() }
             .distinctBy { it.code }
+            // ★★ v1.4.18：名单里的码不上岛（与 LiveUpdate.sync 同一道闸，src 传空 = 不限来源）
+            .filter { e ->
+                val hit = try {
+                    MuteStore.blocks(ctx, "", "", e.no, e.code, e.station)
+                } catch (_: Throwable) {
+                    null
+                }
+                if (hit != null) Log.i(TAG, "名单里的码不上岛：${e.code}（记录 ${hit.id}）")
+                hit == null
+            }
             .filter { !isDismissed(ctx, idOf(it.no)) }
             .take(6)
         val wantIds = want.map { idOf(it.no) }.toSet()
@@ -209,24 +219,12 @@ object IslandHelper {
     /** App 启动/刷新时从持久化快照补推（与 LiveUpdate.syncFromSnapshot 同一套过滤） */
     fun syncFromSnapshot(ctx: Context) {
         if (!isEnabled(ctx)) return
-        val items = try {
-            ExpressStore.load(ctx)
-        } catch (_: Throwable) {
-            return
+        // ★★ v1.4.18：与 [LiveUpdate.syncFromSnapshot] 同步改成单源 + 过黑名单，
+        //   理由见 [PickupGate]：这里原来同样只判 pickedAt、不过名单，
+        //   「清已取」掉的码会继续挂在岛上。
+        val entries = PickupGate.aliveEntries(ctx).map { (k, c) ->
+            Entry(PickupGate.noOf(k, c), c.code, c.station, PickupGate.srcLabel(c.src))
         }
-        if (items.isEmpty()) return
-        val cachedCodes = try {
-            PddCodeStore.all(ctx).values.filter { it.pickedAt == 0L }.map { it.code }.toSet()
-        } catch (_: Throwable) {
-            emptySet()
-        }
-        val entries = items
-            .filter {
-                it.pickupCode.isNotBlank() &&
-                        it.pickupCode in cachedCodes &&
-                        ExpressStore.stageOf(it) == ExpressStore.Stage.ARRIVED
-            }
-            .map { Entry(it.no, it.pickupCode, it.stationText, it.company) }
         sync(ctx, entries)
     }
 

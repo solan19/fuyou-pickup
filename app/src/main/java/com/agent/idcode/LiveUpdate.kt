@@ -221,10 +221,25 @@ fun setEnabled(ctx: Context, on: Boolean) {
         }
 
         // 只上「没取走」的：有取件码、且不是终态。终端态由调用方过滤，这里再兜一道。
-        // 按**取件码**去重（不是按单号）—— 同一个码会带两个不同单号（订单号 \/ 运单号口径）。
+        // 按**取件码**去重（不是按单号）—— 同一个码会带两个不同单号（订单号 / 运单号口径）。
+        //
+        // ★★ v1.4.18：**最后一道闸 —— 名单里的码绝不上岛**。
+        //   上游已经都走 [PickupGate.aliveEntries] 了，但流体云是用户天天盯着的门面，
+        //   多一道按「码 / 运单号」的兜底值得：以后谁新加一条数据源忘了过 PickupGate，
+        //   也不会把用户亲手删掉的码又摆回实况位。
+        //   这里 `src` 传空串 —— MuteStore.srcCompatible 对空串放行（= 不限来源）。
         val want = entries
             .filter { it.no.isNotBlank() && it.code.isNotBlank() }
             .distinctBy { it.code }
+            .filter { e ->
+                val hit = try {
+                    MuteStore.blocks(ctx, "", "", e.no, e.code, e.station)
+                } catch (_: Throwable) {
+                    null
+                }
+                if (hit != null) Log.i(TAG, "名单里的码不上岛：${e.code}（记录 ${hit.id}）")
+                hit == null
+            }
             .take(6)                     // 最多 6 条，跟桌面小组件一个量级
 
         val fpMap = loadFp(ctx).toMutableMap()
@@ -393,35 +408,24 @@ fun setEnabled(ctx: Context, on: Boolean) {
      * 全量的，拿它兜一道，能保证"只要取件码曾经抓到过、且件还在驿站"，流体云上就一直挂着。
      */
     fun syncFromSnapshot(ctx: Context) {
-        val items = try {
-            ExpressStore.load(ctx)
-        } catch (_: Throwable) {
-            return
+        // ★★ v1.4.18：**数据源收敛到 [PddCodeStore] 一处**（经 [PickupGate] 统一过滤）。
+        //
+        //   旧实现是「ExpressStore 快照 ∩ PddCodeStore 的码」，有两个毛病：
+        //   ① **不过黑名单** —— 「清已取 / 长按删除」掉的码只要被平台重新报成待取，
+        //      就照样挂上流体云（同志 14:36 报的就是这个：流体云 3 件、实际 1 个码）；
+        //   ② **与 [PickupPublish] 不同源** —— 那条链用整个 PddCodeStore，这条用快照交集，
+        //      两者集合经常不一样（快照是合并语义、会留陈旧条目，也可能缺刚抓到的码）⇒
+        //      同一时刻两次 sync 传进去的列表不同，指纹来回翻，通知内容反复重发/抖动。
+        //      这就是"流体云并没有遵循某个规则"的另一半原因。
+        //
+        //   现在两条链都调 [PickupGate.aliveEntries]：有码 + 未取件 + 不在黑名单，单一口径。
+        //   顺带修掉 [items.isEmpty() 就 return] 的老毛病 —— 空列表也要交给 sync()，
+        //   它内部才会走「撤下」分支，否则码全删光时流体云会一直挂着一张僵尸卡。
+        val entries = PickupGate.aliveEntries(ctx).map { (k, c) ->
+            Entry(PickupGate.noOf(k, c), c.code, c.station, PickupGate.srcLabel(c.src))
         }
-        if (items.isEmpty()) return
-        // ★ 必须再拿**取件码缓存**过一道：
-        //   快照是"合并语义"（没抓到的旧条目原样保留，免得某个源失败就把基线清掉）⇒ **会留陈旧数据**；
-        //   而 [PddCodeStore] 才是取件码的真实来源 —— 它有一条"服务端说已取出就删"的消除逻辑。
-        //   只按快照推会出现**第 4 栏已经消除了、流体云还挂着**的不一致（2026-09-21 实测踩到：
-        //   同志把件取走、第 4 栏已正确消除，流体云上那张卡却还在）。
-        val cachedCodes = try {
-            // ★ vc256：**已取件的码不算数**（pickedAt != 0）。
-            //   vc229 起"取走了不立刻删、留 24h 才清除"，这 24h 里码还在 PddCodeStore 里 ——
-            //   而这里是流体云唯一的真实来源过滤器，不过滤 pickedAt 就会把已取件的件
-            //   继续挂在流体云上（10-14 19:21 实测：19-2-7008 已取件仍被补推 4 次，
-            //   日志 promotable=true）。
-            PddCodeStore.all(ctx).values.filter { it.pickedAt == 0L }.map { it.code }.toSet()
-        } catch (_: Throwable) {
-            emptySet()
-        }
-        val entries = items
-            .filter {
-                it.pickupCode.isNotBlank() &&
-                        it.pickupCode in cachedCodes &&
-                        ExpressStore.stageOf(it) == ExpressStore.Stage.ARRIVED
-            }
-            .map { Entry(it.no, it.pickupCode, it.stationText, it.company) }
-        Log.i(TAG, "从快照补推 ${entries.size} 条（快照 ${items.size} / 保留中的取件码 ${cachedCodes.size}）")
+        Log.i(TAG, "从缓存补推 ${entries.size} 条：" +
+                entries.joinToString(" | ") { "${it.code}@${it.station.take(6)}" })
         sync(ctx, entries)
     }
 

@@ -243,8 +243,20 @@ android {
         // v1.4.16：**首页/取件码栏不再显示黑名单里的码**（同志 14:20）。原来黑名单只挡了
         //   「在途快递」，「取件码」这条链一直缺闸：清已取撤掉标记与缓存后，平台下一轮照样
         //   把它当"在驿站待取"报上来 ⇒ 卡片重新变成普通待取卡，首页跟着发格子。
-        versionCode = 735
-        versionName = "1.4.16"
+        // v1.4.17：**设置页「权限与保活」三处入口修好**（同志 14:27）。
+        //   ① 一键申请权限：通知已开 + 电池已加时一路 return ⇒ 点了零反馈；现在三项体检
+        //      （通知 / 电池白名单 / 通知使用权）缺什么补什么，每次点击都有 toast 说明；
+        //   ② 电池优化白名单：batteryExempt() 为 true 时静默 return ⇒ 同上，现在开列表页核对；
+        //   ③ 后台运行：原来跳 ACTION_MANAGE_OVERLAY_PERMISSION（悬浮窗），本应用没声明
+        //      SYSTEM_ALERT_WINDOW ⇒ 改跳各 ROM 的真自启动页（本机实测 com.oplus.battery 的
+        //      StartupAppListActivity 就是「自启动」），全不认时兜到应用信息页。
+        // v1.4.18：**流体云/小组件/岛通知统一走 PickupGate（含黑名单闸）**。同志 14:36：
+        //   「流体云仍然弹出有 3 个快递，但目前只有一个取件码」。根因是"哪些码该发布"
+        //   在四条链上各判一遍，后三条（PickupPublish / LiveUpdate 补推 / IslandHelper 补推）
+        //   都只判 "有码 + 未取件"、**没过黑名单**；而且 PickupPublish 用整个 PddCodeStore、
+        //   补推用 ExpressStore 快照交集 ⇒ 两个数据源互相覆盖，指纹来回翻（"没遵循规则"）。
+        versionCode = 737
+        versionName = "1.4.18"
     }
 
     buildTypes {
