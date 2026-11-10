@@ -150,6 +150,10 @@ class MainActivity : Activity() {
         get() = settingsLayerField
         set(value) {
             settingsLayerField = value
+            // ★★ v1.4.9：层没了就必须把"正在关闭"一起清掉 —— 否则 8 个子页面/主题切换点
+            //   那种「removeView + 置 null + openSettings()」的路径会把 closing 留在 true，
+            //   下一次关闭时 closeSettings 直接 return ⇒ 设置页关不掉。
+            if (value == null) settingsClosing = false
             syncBackEnabled()
         }
 
@@ -161,7 +165,16 @@ class MainActivity : Activity() {
      *   反馈动画一旦被打断，scaleX 就永久停在 0.9，按钮**从此再也点不动**。
      *   改成布尔标志 + 两条自愈路径（动画结束 / 400ms 兜底）。
      */
-    private var settingsBtnBusy = false
+    /**
+     * ★★ v1.4.9：**布尔标志不可靠，改时间戳**。
+     * 同志 2026-11-10 实测「设置页进去一次再退出来就再也进不去了」：真机日志里点齿轮
+     * 连一行日志都没有 —— 因为 Log 当年写在 busy 判断**之后**，busy 卡住就静默返回。
+     * 布尔值是类级字段、按钮又是单例，两个收尾回调（动画结束 / 400ms 兜底）只要有一个
+     * 没跑到（视图重建、动画被取消）就永久为 true ⇒ 永久锁死。
+     * 时间戳只挡 450ms 内的连点，不存在"永久锁死"这种状态。
+     */
+    @Volatile
+    private var settingsBtnLastTapMs = 0L
     /** 预测性返回：AndroidX 的 dispatcher（内部桥接系统的预测性返回能力） */
     private val backDispatcher = androidx.activity.OnBackPressedDispatcher()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -2134,10 +2147,8 @@ class MainActivity : Activity() {
                         if (n >= 3) {
                             muteRunningRounds.remove(key)
                             try {
-                                for (id in ids) {
-                                    MuteStore.remove(this@MainActivity, id)
-                                    MuteStore.remove(this@MainActivity, "$src:$id")
-                                }
+                                // ★ v1.4.9：记录制名单 —— 按身份 token 删整条记录
+                                MuteStore.removeKey(this@MainActivity, key)
                             } catch (t: Throwable) { SafeRun.w("MuteStore", t) }
                             Log.i("MuteStore", "自动移出仍在途的项（连续多轮运输中）id=$key")
                         } else {
@@ -2533,10 +2544,9 @@ class MainActivity : Activity() {
                             saveManualWaybills(this@MainActivity, kept)
                             manualTransit.removeAll { it.optString("waybillNo") == no }
                         }
-                        // ★★ vc670：同"取件码页删除"口径 —— 按这件包裹的全部身份屏蔽，
-                        //   否则另一个来源里键不同的同一件会在下一次刷新时回来。
-                        pickupMutedAdd(bkey)
-                        runCatching { parcelIds(src, pkg).forEach { pickupMutedAdd(it) } }
+                        // ★★ v1.4.9：按这件包裹的**全部身份写一条记录**（订单号/运单号/取件码/驿站/标题），
+                        //   不再往名单里塞三个互不相干的扁平键 —— 取件码会被复用，那样会误伤以后的新件。
+                        mutePackage(src, pkg)
                         val mutedNow = pickupMutedAll()
                         fun drop(list: ArrayList<JSONObject>) {
                             list.removeAll { q -> isPickupMuted(q.optString("src"), q, mutedNow) }
@@ -3653,11 +3663,8 @@ class MainActivity : Activity() {
         // ★ vc676：调试用 —— 按逗号分隔的键把指定项移出黑名单（清测试残留，不动用户自己删的）
         intent?.getStringExtra("debug_unmute")?.let { raw ->
             val keys = raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-            val all = MuteStore.all(this)
-            var n = 0
-            for (k in keys) if (all.remove(k)) n++
-            MuteStore.save(this, all)
-            Log.i("MuteStore", "调试移出黑名单 $n 条：$keys")
+            for (k in keys) MuteStore.removeKey(this, k)
+            Log.i("MuteStore", "调试移出黑名单 ${keys.size} 条：$keys 余 ${MuteStore.entries(this).size}")
         }
         // ★ vc583：把**整份**取件码缓存清空（含真实抓取残留；只给调试用）
         // ★★ vc614：单一裁决器自测（纯本地，不联网）：--ez debug_verdict_selftest true
@@ -10613,8 +10620,18 @@ class MainActivity : Activity() {
 
     // ---------- 取件码层（第 4 栏） ----------
 
+    /**
+     * ★★ v1.4.9b：页面上**真正显示出来**的「已取件」卡数（-1 = 本轮还没渲染过）。
+     * 顶栏「清已取 N」以它为准 —— 数缓存会把过了 24h、被名单挡掉、去重后没上屏的历史标记也算进去，
+     * 于是出现过"页面一个都没有，右上角写着 5"（同志 2026-11-10 报的）。
+     */
+    private var pickupPickedVisible: Int = -1
+    /** 顶栏按钮的刷新回调（renderMerged 渲染完调一次） */
+    private var pickupClearBtnRefresh: (() -> Unit)? = null
+
     private fun openPickup(mode: String = "all") {
         if (pickupLayer != null) return
+        pickupPickedVisible = -1
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         // ★ vc321：layer 从 LinearLayout 换成「FrameLayout 外壳 + column 纵列」——
@@ -10636,20 +10653,33 @@ class MainActivity : Activity() {
                 setPadding((10 * dp).toInt(), (6 * dp).toInt(), (10 * dp).toInt(), (6 * dp).toInt())
                 isClickable = true
             }
+            // ★★ v1.4.9b：**数字跟着页面走**（同志 2026-11-10：页面上一个已取件都没有，
+            //   右上角却写着「清已取 5」）。原因是这里数的是**缓存条数**，
+            //   而缓存里可能躺着 5 条早就过了 24h / 被名单挡掉 / 去重后没上屏的历史标记。
+            //   ⇒ 渲染完成后由 [renderMerged] 把"页面上真正显示出的已取件卡数"写进来，
+            //     按钮一律以它为准；还没渲染过（-1）才退回数缓存。
             fun refreshClearBtn() {
-                val n = pickedCountNow()
+                val n = if (pickupPickedVisible >= 0) pickupPickedVisible else pickedCountNow()
                 clearBtn.text = if (n > 0) "清已取 $n" else "清已取"
                 clearBtn.setTextColor(if (n > 0) cAccent else cTextFaint)
             }
+            pickupClearBtnRefresh = { refreshClearBtn() }
             refreshClearBtn()
             clearBtn.setOnClickListener {
-                val n = pickedCountNow()
-                if (n == 0) {
+                val shown = if (pickupPickedVisible >= 0) pickupPickedVisible else pickedCountNow()
+                val total = pickedCountNow()
+                if (total == 0) {
                     appToast(this, "没有已取件的快递")
                 } else {
+                    val msg = if (total > shown) {
+                        "页面上有 $shown 个「已取件」，缓存里另有 ${total - shown} 条历史标记。\n\n" +
+                                "一共删除 $total 条已取件记录？待取的不会动。"
+                    } else {
+                        "删除 $total 个「已取件」的取件码？待取的不会动。"
+                    }
                     AlertDialog.Builder(this)
                         .setTitle("清已取件")
-                        .setMessage("删除 $n 个「已取件」的取件码？待取的不会动。")
+                        .setMessage(msg)
                         .setPositiveButton("删除") { _, _ ->
                             var del = 0
                             for ((k, c) in PddCodeStore.all(this)) {
@@ -10657,12 +10687,22 @@ class MainActivity : Activity() {
                                     // ★★ v1.3.8：**一键清已取也必须写屏蔽名单**。
                                     //   同志实测：长按删除不会让快递回到在途栏（因为写了名单），
                                     //   而右上角「清已取」只删缓存、没写名单 ⇒ 这单退化成
-                                    //   "无码在途件"又被在途栏收回来。这里补齐与长按删除同一套身份。
-                                    MuteStore.add(this, k)
-                                    if (c.code.isNotBlank()) MuteStore.add(this, c.code)
-                                    if (c.waybill.isNotBlank()) {
-                                        MuteStore.add(this, "${c.src}:${c.waybill}")
-                                    }
+                                    //   "无码在途件"又被在途栏收回来。
+                                    // ★★ v1.4.9：改成**一条记录**（订单号/运单/码/驿站/标题一起存），
+                                    //   不再写三个扁平键 —— 取件码复用会误伤以后的新件。
+                                    MuteStore.addEntry(
+                                        this,
+                                        MuteStore.Entry(
+                                            id = "c" + System.currentTimeMillis() + "-" + del,
+                                            src = c.src,
+                                            orderSn = if (c.src == "pdd") k.substringAfter(':') else "",
+                                            waybill = c.waybill,
+                                            code = c.code,
+                                            station = c.station,
+                                            title = PddTitleStore.get(this, k.substringAfter(':')),
+                                            ts = System.currentTimeMillis()
+                                        )
+                                    )
                                     PddCodeStore.remove(this, k)
                                     del++
                                 }
@@ -10802,6 +10842,9 @@ class MainActivity : Activity() {
         pickupStickyBox = null
         pickupSticky = null
         pickupScroll = null
+        // ★ v1.4.9b：顶栏按钮的引用一起清掉（视图已随层销毁，留着是脏引用）
+        pickupClearBtnRefresh = null
+        pickupPickedVisible = -1
         // ★ vc321：dock 已在层内，随层一起走，不再单独拆（引用清掉防挂脏）
         pickupDock = null
         cancelPickupTimeout()
@@ -10972,16 +11015,22 @@ class MainActivity : Activity() {
             isClickable = true
             isFocusable = true
             setOnClickListener { v ->
-                if (settingsBtnBusy) return@setOnClickListener
-                settingsBtnBusy = true
+                // ★★ v1.4.9：**日志必须在所有判断之前** —— 否则"点不动"的时候什么线索都没有。
+                val now = System.currentTimeMillis()
+                val gap = now - settingsBtnLastTapMs
+                if (gap in 0..450) {
+                    Log.i("SetPerf", "click 忽略（${gap}ms 内连点）")
+                    return@setOnClickListener
+                }
+                settingsBtnLastTapMs = now
                 v.scaleX = 1f
                 v.scaleY = 1f
-                Log.i("SetPerf", "click")
+                Log.i("SetPerf", "click layer=${settingsLayer != null} closing=$settingsClosing")
                 // ★★ 先动手，再播反馈（2026-09-22 提速）：
                 //   原顺序是「点 → 压扁70 → 回弹90 → 才 openSettings()」，那 170ms 用户纯干等
                 //   （实测 click→openSettings 间隔 170ms，占整条链路的 29%）。
                 //   现在**立刻构建并滑入**，按钮缩放只是视觉反馈，不再阻塞页面出现。
-                //   重入由 openSettings 里的 `settingsLayer != null` 拦住，安全。
+                //   重入由 openSettings 里的自愈判断拦住，安全。
                 openSettings()
                 // Linear 口径：短、快、不弹跳
                 // ★ 恢复态**直接写值**，不再依赖"再开一段动画回来" ——
@@ -10989,11 +11038,9 @@ class MainActivity : Activity() {
                 v.animate().scaleX(0.90f).scaleY(0.90f).setDuration(UiTok.D100).withEndAction {
                     v.scaleX = 1f
                     v.scaleY = 1f
-                    settingsBtnBusy = false
                 }.start()
-                // 兜底自愈：无论动画有没有跑完，400ms 后一定解锁并归位
+                // 兜底自愈：无论动画有没有跑完，400ms 后一定归位
                 v.postDelayed({
-                    settingsBtnBusy = false
                     v.scaleX = 1f
                     v.scaleY = 1f
                 }, 400)
@@ -11018,7 +11065,25 @@ class MainActivity : Activity() {
 
     private fun openSettings() {
         try { UiTrace.page(this, "settings") } catch (t: Throwable) { SafeRun.w("MainActivity", t) }
-        Log.i("SetPerf", "openSettings enter")
+        Log.i("SetPerf", "openSettings enter layer=${settingsLayer != null} closing=$settingsClosing")
+        // ★★ v1.4.9：**自愈**。设置层是"有没有页面"的唯一真相，但它有可能变成孤儿：
+        //   ① 退场动画的 withEndAction 没跑到 ⇒ 字段非空、视图其实已经不在 root 上；
+        //   ② `settingsClosing` 卡在 true ⇒ 之后 closeSettings 直接 return，页面再也关不掉。
+        //   两个残留都会表现成"设置页进不去/出不来"，且只看字段完全看不出来。
+        //   这里进门先校验一次：层不在 root 里就丢掉重来。
+        val stale = settingsLayer
+        if (stale != null) {
+            val attached = try { stale.parent === root } catch (_: Throwable) { false }
+            if (!attached) {
+                Log.w("SetPerf", "自愈：设置层已不在视图树上，丢弃旧字段重建")
+                try { root.removeView(stale) } catch (_: Throwable) { }
+                settingsLayer = null
+            } else if (!settingsClosing) {
+                Log.i("SetPerf", "设置页已开着，忽略重复打开")
+                return
+            }
+        }
+        settingsClosing = false
         if (settingsLayer != null) return
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         var scheduled = prefs.getString(KEY_THEME_MODE, "system") == "scheduled"
@@ -12429,7 +12494,7 @@ class MainActivity : Activity() {
         // ★ vc553：黑名单（删除过的快递都在这里，可移出）
         // ★ vc694：入口条数只算黑名单本身；永久隐藏的单独提示，别混成一个数糊弄人
         val blCount = pickupMutedOnly().size
-        val hiddenCount = MuteStore.hidden(this).size
+        val hiddenCount = MuteStore.hiddenCount(this)
         otherContent.addView(sourceRow(
             "黑名单",
             when {
@@ -12478,6 +12543,18 @@ class MainActivity : Activity() {
         // ★ 防重入：收拢动画期间连点返回会重复 removeView（直接崩）
         if (settingsClosing) return
         settingsClosing = true
+        // ★★ v1.4.9：**硬兜底**。原来只靠 `withEndAction` 收尾：动画被打断
+        //   （视图重建 / 又开了一次动画 / 层被别处 addView 覆盖）时 endAction 永远不跑
+        //   ⇒ settingsLayer 与 settingsClosing 双双卡住 ⇒ "退出来就再也进不去"。
+        //   这里再加一条 400ms 的强制收尾，幂等，不会重复 removeView。
+        mainHandler.postDelayed({
+            if (layer.parent === root) {
+                Log.w("SetPerf", "closeSettings 硬兜底：动画未回调，强制移除")
+                try { root.removeView(layer) } catch (t: Throwable) { SafeRun.w("SetPerf", t) }
+            }
+            if (settingsLayer === layer) settingsLayer = null
+            settingsClosing = false
+        }, 400)
         // ★ 从左往右滑出 —— 动画播完再真正移除，否则会看到"啪"地消失
         slideOut(layer) {
             root.removeView(layer)
@@ -12538,34 +12615,28 @@ class MainActivity : Activity() {
      * 对应源本次抓取**失败**（err != null）时**不动缓存** —— 失败不代表取走了。
      */
     // ★★ vc620：黑名单统一走 [MuteStore]（与后台通知共用一份存储，见 MuteStore 注释）
-    // ★★ vc694：**这里返回"黑名单 + 永久隐藏"的并集** —— 渲染、写缓存、途中过滤所有
-    //   `key !in pickupMutedAll()` / `isPickupMuted(...)` 判断自动把永久隐藏也挡掉，
-    //   不用去十几个调用点逐个改（少一处漏一处就会出现"藏了又冒出来"）。
-    //   **只给黑名单页自己看的**用下面那个 [pickupMutedOnly]。
+    // ★★ v1.4.9：**改成"按包裹记录"模型**。这里返回的是整份记录的身份 token 集合，
+    //   只用于日志/粗筛与"这件是不是被我删过"的快速判断；
+    //   真正的判定（带身份强度与时间窗）在 [isPickupMuted] → [MuteStore.blocks] 里做。
     private fun pickupMutedAll(): MutableSet<String> {
-        val s = MuteStore.all(this)
-        s.addAll(MuteStore.hidden(this))
+        val s = LinkedHashSet<String>()
+        for (e in MuteStore.entries(this)) {
+            if (e.orderSn.isNotBlank()) s.add(e.orderSn)
+            if (e.waybill.isNotBlank()) s.add(e.waybill)
+            if (e.code.isNotBlank()) s.add(e.code)
+        }
         return s
     }
 
-    /** ★ vc694：真正的黑名单（不含永久隐藏）—— 黑名单页列表、条数、逐条移出都用它 */
-    private fun pickupMutedOnly(): MutableSet<String> = MuteStore.all(this)
+    /** ★ v1.4.9：真正的黑名单记录（不含永久隐藏）—— 黑名单页列表、条数、逐条移出都用它 */
+    private fun pickupMutedOnly(): List<MuteStore.Entry> = MuteStore.active(this)
 
-    /** ★ vc280：把删除屏蔽键（pdd:261013-xxx / code:31-5-7006）翻成给人看的文案 */
-    private fun mutedLabel(key: String): String {
-        // ★ vc696：纯单号（没有 `src:` 前缀，多来自后台"不再提醒"）直接显示，
-        //   否则 src 与 sn 都取到同一个串，卡片上会出现 "YT07… YT07…" 重复两遍
-        //   （同志 11-04 15:18 截图里就是这样）。
-        if (!key.contains(':')) return key
-        val src = key.substringBefore(':')
-        val sn = key.substringAfter(':')
-        val name = when (src) {
-            "pdd" -> "拼多多"; "cainiao" -> "菜鸟"; "jd" -> "京东"
-            "mi" -> "小米"; "manual" -> "手动单号"
-            "tb" -> "淘宝"
-            else -> src
-        }
-        return if (src == "code") "取件码 $sn" else "$name $sn"
+    /** ★ v1.4.9：一条记录 → 给人看的来源名（标题为空时兜底用） */
+    private fun srcDisplayName(src: String): String = when (src) {
+        "pdd" -> "拼多多"; "cainiao" -> "菜鸟"; "jd" -> "京东"
+        "mi" -> "小米"; "manual" -> "手动单号"; "tb" -> "淘宝"
+        "" -> "包裹"
+        else -> src
     }
 
     // ---------------- ★ vc553：黑名单页面（设置 → 其他 → 黑名单） ----------------
@@ -12624,8 +12695,7 @@ class MainActivity : Activity() {
                     title = "全部删除",
                     message = "删除仅能通过清除APP数据才能恢复，是否删除？"
                 ) {
-                    MuteStore.addHidden(this, keys)
-                    MuteStore.clear(this)
+                    MuteStore.hideAll(this)
                     appToast(this, "已删除 ${keys.size} 条")
                     Log.i("Blacklist", "全部删除=永久隐藏 ${keys.size} 条")
                     rebuildBlacklist()
@@ -12727,16 +12797,20 @@ class MainActivity : Activity() {
 
         fun fill() {
             col.removeAllViews()
-            val keys = pickupMutedOnly().sorted()
-            countTv.text = if (keys.isEmpty()) "" else "${keys.size} 条"
+            val keys = pickupMutedOnly().sortedByDescending { it.ts }
+            countTv.text = if (keys.isEmpty()) "" else "${keys.size} 件"
             val hasAny = keys.isNotEmpty()
             listOf(clearPill, removePill).forEach { it.alpha = if (hasAny) 1f else 0.35f }
 
-            // 说明卡：讲清两个动作的差别（与设置页卡片同款）
+            // 说明卡：讲清两个动作的差别 + 新模型（同志 11-10 要求重新设计的原因）
             col.addView(linearCard(UiTok.R14).apply {
                 setPadding((16 * dp).toInt(), (14 * dp).toInt(), (16 * dp).toInt(), (14 * dp).toInt())
                 addView(TextView(this@MainActivity).apply {
                     text = "长按「在途快递」或「取件码」里的卡片 → 删除，就会加到下面这个名单。\n\n" +
+                            "一条记录 = 一个包裹（订单号 + 运单号 + 取件码 一起存），\n" +
+                            "不会再把一个件拆成三条记。\n" +
+                            "取件码/运单号会被复用：只有 7 天内的取件码（且同一驿站）、" +
+                            "60 天内的运单号才认，以后的新件不会被误伤。\n\n" +
                             "全部删除：永久删除，只能清除 App 数据才能恢复。\n" +
                             "全部移除：正常移除，平台有返回就会重新出现。"
                     textSize = UiTok.T13
@@ -12752,28 +12826,41 @@ class MainActivity : Activity() {
                     setPadding((6 * dp).toInt(), (22 * dp).toInt(), (6 * dp).toInt(), 0)
                 })
             }
-            for (k in keys) {
+            for (e in keys) {
                 val card = linearCard(UiTok.R14).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
                     setPadding((16 * dp).toInt(), (12 * dp).toInt(), (12 * dp).toInt(), (12 * dp).toInt())
                 }
-                card.addView(TextView(this).apply {
-                    text = mutedLabel(k)
+                val textCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                // 主行 = 商品标题（拿不到标题才退回单号尾号）
+                textCol.addView(TextView(this).apply {
+                    text = e.displayTitle()
                     textSize = UiTok.T15
                     setTextColor(cTextPrimary)
                     maxLines = 2
-                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                })
+                // 次行 = 来源 + 各身份（订单号/运单号/取件码/驿站）
+                val ids = e.identityLine()
+                textCol.addView(TextView(this).apply {
+                    text = listOf(srcDisplayName(e.src), ids).filter { it.isNotBlank() }.joinToString(" · ")
+                    textSize = UiTok.T11
+                    setTextColor(cTextTertiary)
+                    maxLines = 2
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    setPadding(0, (4 * dp).toInt(), 0, 0)
+                })
+                card.addView(textCol, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                 card.addView(TextView(this).apply {
                     text = "移出"
                     textSize = UiTok.T13
                     setTextColor(cAccent)
                     setPadding((12 * dp).toInt(), (6 * dp).toInt(), (4 * dp).toInt(), (6 * dp).toInt())
                     setOnClickListener {
-                        val set = pickupMutedOnly()
-                        set.remove(k)
-                        MuteStore.save(this@MainActivity, set)
-                        appToast(this@MainActivity, "已移出：${mutedLabel(k)}")
+                        MuteStore.remove(this@MainActivity, e.id)
+                        appToast(this@MainActivity, "已移出：${e.displayTitle()}")
+                        Log.i("Blacklist", "移出记录 id=${e.id} ${e.src}/${e.orderSn}/${e.waybill}/${e.code}")
                         fill()
                     }
                 })
@@ -12786,7 +12873,11 @@ class MainActivity : Activity() {
         }
         rebuildBlacklist = { fill() }
         fill()
-        Log.i("Blacklist", "打开黑名单页：黑名单 ${pickupMutedOnly().size} 条 / 永久隐藏 ${MuteStore.hidden(this).size} 条")
+        Log.i(
+            "Blacklist",
+            "打开黑名单页：记录 ${pickupMutedOnly().size} 条 / 永久隐藏 ${MuteStore.hiddenCount(this)} 条"
+        )
+        Log.i("Blacklist", "名单明细：" + MuteStore.dump(this))
     }
 
     private var rebuildBlacklist: (() -> Unit)? = null
@@ -12800,13 +12891,38 @@ class MainActivity : Activity() {
         blacklistLayer = null
     }
 
-    private fun pickupMutedAdd(key: String) {
-        // ★★ vc670：**必须写 MuteStore**。
-        //   旧写法写的是 `pickup_muted`（vc620 之前的旧键），而 [pickupMutedAll] 读的是
-        //   `MuteStore` 的 `mute_keys`。MuteStore.all() 只要 `mute_keys` 存在就直接返回，
-        //   不会再迁移旧键 ⇒ 长按删除**从来没进过真正的黑名单**：
-        //   弹窗提示"已删除"，下一次渲染卡片原样回来（2026-11-02 用户实测，删几次都一样）。
-        MuteStore.add(this, key)
+    /**
+     * ★★ v1.4.9：**删除一个包裹 = 写一条记录**（不再是往名单里塞三个互不相干的键）。
+     *
+     * 三个键各写各的后果：取件码/运单号被复用后，新件会撞上旧键被误伤
+     * （真机实证 2026-11-10：在途 11 件被名单剔掉 3 件，含用户要找的「化妆棉」）。
+     * 现在把同一件的订单号 + 运单号 + 取件码 + 驿站 + 商品标题**捆成一条**，
+     * 判定时按身份强度分级（见 [MuteStore.blocks]）。
+     */
+    private fun mutePackage(src: String, pkg: JSONObject) {
+        val station = pkg.optString("stationText")
+            .ifEmpty { pkg.optString("stationName") }
+            .ifEmpty { pkg.optString("nickName") }
+        val waybill = pkg.optString("realWaybill").ifEmpty { pkg.optString("waybillNo") }
+            .ifEmpty { pkg.optString("mailNo") }
+        MuteStore.addEntry(
+            this,
+            MuteStore.Entry(
+                id = "e" + System.currentTimeMillis(),
+                src = src,
+                orderSn = pkg.optString("orderSn"),
+                waybill = waybill,
+                code = pkg.optString("pickupCode"),
+                station = station,
+                title = pkg.optString("goodsName"),
+                ts = System.currentTimeMillis()
+            )
+        )
+        Log.i(
+            "MuteStore",
+            "删除并入名单：src=$src sn=${pkg.optString("orderSn")} wb=$waybill " +
+                    "code=${pkg.optString("pickupCode")} goods=${pkg.optString("goodsName").take(16)}"
+        )
     }
 
     /**
@@ -13101,7 +13217,11 @@ class MainActivity : Activity() {
         //   旧写法不看屏蔽 ⇒ 用户长按删除的卡下一轮又从缓存补回来
         //   （日志实证：`渲染开始 cainiao=0 pdd=0 … 删除屏蔽=29`，源里全空但页面上还有卡）。
         val mutedNow = pickupMutedAll()
-        for ((key, c) in cache) {
+        // ★★ v1.4.9b：**必须遍历快照**。循环体里有两处 `cache.remove(key)`（清掉"已取走"的旧码），
+        //   直接在 `LinkedHashMap` 上边遍历边删 ⇒ `ConcurrentModificationException`，
+        //   整个进程崩掉（同志 2026-11-10 11:45:58 的崩溃栈：renderMerged → syncPickupCodeCache）。
+        //   以前偶尔才崩，这一次缓存里正好躺着几条"已取件"的旧码，百分百触发。
+        for ((key, c) in cache.entries.toList()) {
             if (c.code.isBlank()) continue
             val sn = key.substringAfter(':', key)
             val src = c.src.ifEmpty { key.substringBefore(':') }
@@ -13251,15 +13371,34 @@ class MainActivity : Activity() {
     }
 
     /**
-     * ★★ vc670：这张卡是否已被用户长按删除（**跨来源**）。
-     * 命中任一身份即算：`src:键` 精确匹配，或该件任一身份在纯单号黑名单里。
+     * 这张卡是否已被用户长按删除（**跨来源**）。
+     *
+     * ★★ v1.4.9：判定交给 [MuteStore.blocks] —— 按身份强度分级（订单号永久 /
+     * 运单号 60 天 / 取件码 7 天且必须同驿站）。
+     * 以前是"任一身份命中就整件隐藏"，而 `parcelIds()` 里含**取件码**，
+     * 取件码是驿站格口码、天天复用 ⇒ 新到的件被旧记录误伤
+     * （同志 2026-11-10 的「化妆棉」就是这么丢的：在途 11 件被名单剔掉 3 件）。
      */
     private fun isPickupMuted(src: String, p: JSONObject, muted: Set<String>): Boolean {
-        if (muted.isEmpty()) return false
-        val key = pickKey(src, p)
-        if (key != null && "$src:$key" in muted) return true
-        // 纯单号形态（后台"不再提醒"写的就是这种）与跨源身份
-        return parcelIds(src, p).any { it in muted }
+        val hit = MuteStore.blocks(
+            this,
+            src,
+            p.optString("orderSn"),
+            p.optString("realWaybill").ifEmpty { p.optString("waybillNo") }
+                .ifEmpty { p.optString("mailNo") },
+            p.optString("pickupCode"),
+            p.optString("stationText").ifEmpty { p.optString("stationName") }
+                .ifEmpty { p.optString("nickName") }
+        )
+        if (hit != null) {
+            Log.i(
+                "PickupMuted",
+                "命中名单：$src ${p.optString("orderSn")} 码=${p.optString("pickupCode")} " +
+                        "← 记录(${hit.src}/${hit.orderSn}/${hit.waybill}/${hit.code})"
+            )
+            return true
+        }
+        return false
     }
 
     // ---------------- ★★ 统一取件码解析（照参考项目 GoodsPresentation）----------------
@@ -13284,8 +13423,7 @@ class MainActivity : Activity() {
         return PICKUP_RE.find(text)?.groupValues?.get(2)?.trim().orEmpty()
     }
 
-    /** 对每个件把它手上所有文本都试一遍，缺码就补上（已有码的不动） */
-    private fun fillPickupCodes(list: MutableList<JSONObject>) {
+    /** 对每个件把它手上所有文本都试一遍，缺码就补上（已有码的不动） */    private fun fillPickupCodes(list: MutableList<JSONObject>) {
         var filled = 0
         for (p in list) {
             if (p.optString("pickupCode").isNotEmpty()) continue
@@ -13304,6 +13442,50 @@ class MainActivity : Activity() {
             }
         }
         if (filled > 0) Log.i("PickupFill", "统一解析补出 $filled 个取件码")
+    }
+
+    /**
+     * ★★ v1.4.9：**商品标题的"记账 + 回填"**。
+     *
+     * 同志 2026-11-10 要求：取件码页面要显示取件码对应的快递标题（这单买的是什么）。
+     * 难点在于标题的来源不齐：拼多多订单列表有 `goodsName`，而**物流页补出来的卡**
+     * （`PddEnrich` 新建的那条）只有码和驿站；重启后从缓存恢复的卡也可能没有。
+     *
+     * 做法：
+     *  ① 凡是这轮见到标题，就按**订单号**记进 [PddTitleStore]（一行字，500 条上限）；
+     *  ② 缺标题的卡先按订单号查字典，查不到再看同一轮里**同单号/同运单号**的另一份卡
+     *     （拼多多卡和菜鸟卡常常是同一件）；
+     *  ③ 只补空值，绝不覆盖已有标题。
+     */
+    private fun backfillPackageTitles(list: MutableList<JSONObject>) {
+        val learn = HashMap<String, String>()
+        for (p in list) {
+            val sn = p.optString("orderSn")
+            val t = p.optString("goodsName")
+            if (sn.isNotEmpty() && t.isNotEmpty()) learn[sn] = t
+        }
+        if (learn.isNotEmpty()) PddTitleStore.putAll(this, learn)
+        var filled = 0
+        for (p in list) {
+            if (p.optString("goodsName").isNotEmpty()) continue
+            val sn = p.optString("orderSn")
+            var t = if (sn.isNotEmpty()) PddTitleStore.get(this, sn) else ""
+            if (t.isEmpty()) {
+                val wb = p.optString("realWaybill").ifEmpty { p.optString("waybillNo") }
+                t = list.firstOrNull { q ->
+                    q !== p && q.optString("goodsName").isNotEmpty() && (
+                            (sn.isNotEmpty() && q.optString("orderSn") == sn) ||
+                                    (wb.isNotEmpty() && (q.optString("realWaybill") == wb ||
+                                            q.optString("waybillNo") == wb))
+                            )
+                }?.optString("goodsName").orEmpty()
+            }
+            if (t.isNotEmpty()) {
+                p.put("goodsName", t)
+                filled++
+            }
+        }
+        if (filled > 0) Log.i("PickupTitle", "回填商品标题 $filled 张（字典 ${learn.size} 条）")
     }
 
     // ---------------- ★★ 跨源去重 ----------------
@@ -14552,6 +14734,11 @@ class MainActivity : Activity() {
         //   这里再过一遍，能补多少补多少。放在去重之后、写缓存之前。
         fillPickupCodes(pending)
 
+        // ★★ v1.4.9：**补商品标题**（同志 2026-11-10：取件码页面要显示这单是什么东西）。
+        //   取件码卡有好几条来路，物流页补出来的卡根本没有标题字段；
+        //   这里一边把见过的标题按订单号记下来，一边给缺标题的卡回填。
+        backfillPackageTitles(pending)
+
         // ★ 拼多多取件码「常态显示 + 已取出自动消除」（2026-09-20 同志定的规则）
         val beforeCacheSync = pending.size
         syncPickupCodeCache(pending)
@@ -14633,6 +14820,9 @@ class MainActivity : Activity() {
         // ★ vc229：「N 个待取」只数**还没取**的 —— 打了「已取件」标记的卡虽然还显示，
         //   但它已经不是待取了，混进计数会让数字虚高。
         val activeCount = visible.count { it.optLong("pickedAt", 0L) == 0L }
+        // ★★ v1.4.9b：**「清已取 N」用页面上真正显示出来的已取件卡数**，不再数缓存条数
+        pickupPickedVisible = visible.count { it.optLong("pickedAt", 0L) != 0L }
+        try { pickupClearBtnRefresh?.invoke() } catch (t: Throwable) { SafeRun.w("PickupClear", t) }
         getSharedPreferences(PREFS, MODE_PRIVATE).edit()
             .putInt(KEY_LAST_PKG_COUNT, activeCount)
             .putString(KEY_LAST_PKG_TIME, now)
@@ -15001,6 +15191,20 @@ class MainActivity : Activity() {
             src.addAll(jdTransit)
             src.addAll(miTransit)
                 src.addAll(manualTransit)
+            // ★★ v1.4.9b：**在这里记商品标题**（同志要求取件码页显示在途页那种标题）。
+            //   这里是"所有来源的件都会过一遍"的唯一汇合点，而拼多多卡的 `goodsName`
+            //   只有在订单列表这一路才带得出来；取件码页的缓存卡往往没有。
+            //   记成 订单号 → 标题，取件码卡渲染时按订单号回查即可。
+            run {
+                val pairs = HashMap<String, String>()
+                for (p in src) {
+                    if (p.optString("src") != "pdd") continue
+                    val sn = p.optString("orderSn")
+                    val g = p.optString("goodsName")
+                    if (sn.isNotEmpty() && g.isNotEmpty()) pairs[sn] = g
+                }
+                if (pairs.isNotEmpty()) PddTitleStore.putAll(this, pairs)
+            }
             // ★ 跨源去重：快照里同一件只留一条 —— 否则 TrackWorker 会对同一件各判一次，
             //   「派件中」「已到达」同一个物流动态会发出**两条**通知。
             val items = dedupPkgs(src).mapNotNull { ExpressStore.fromPkg(it) }
@@ -16848,7 +17052,7 @@ class MainActivity : Activity() {
             }.let { if (isNonPlaceStationLabel(it)) "" else it }
             listOf(
                 // ★ vc683：公司名已经做成头部 chip，明细行不再重复（原来会「极兔 · 极兔速递」）
-                goodsTag(pkg.optString("goodsName")),   // ★ vc699：商品长标题 → 小标签
+                // ★ v1.4.9：商品标题已经单独占一行（见上方 goodsTitle），明细行不再重复它
                 addr.ifEmpty { pkg.optString("statusText") }, orderDate
             ).filter { it.isNotEmpty() }.joinToString(" · ")
         } else {
@@ -16918,6 +17122,35 @@ class MainActivity : Activity() {
             if (cpTag != platText) {
                 headRow.addView(chip(cpTag, COURIER_COLOR[cpTag] ?: "#5F5E5A"), chipLp())
             }
+        }
+        // ★★ v1.4.9b：**商品标题与在途快递同款**（同志 2026-11-10 要求"按照在途快递那里的标题"）。
+        //   在途卡上是「官方 chip + 商品小标签（棉服/内裤/润唇膏）」的排法，
+        //   取件码卡原来直接贴一长串描述标题，两页观感对不上。
+        //   ⇒ 统一走同一个 [goodsTag] 收敛 + 同一个 tagBg 样式、同一个字号，紧跟在平台 chip 后面。
+        // ★ 缓存补出来的卡常常没有 goodsName ⇒ 按订单号回查字典（见 [PddTitleStore]）。
+        var goodsRaw = pkg.optString("goodsName")
+        if (goodsRaw.isEmpty() && src == "pdd") {
+            val cachedTitle = PddTitleStore.get(this, pkg.optString("orderSn"))
+            if (cachedTitle.isNotEmpty()) {
+                goodsRaw = cachedTitle
+                pkg.put("goodsName", cachedTitle)
+            }
+        }
+        val goodsShort = goodsTag(goodsRaw)
+        if (goodsShort.isNotEmpty() && goodsShort != platText) {
+            headRow.addView(TextView(this@MainActivity).apply {
+                text = goodsShort
+                textSize = UiTok.T13
+                typeface = tfMedium
+                setTextColor(cTextSecondary)
+                gravity = Gravity.CENTER
+                background = tagBg()
+                setPadding((8 * dp).toInt(), (3 * dp).toInt(), (8 * dp).toInt(), (3 * dp).toInt())
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { leftMargin = (6 * dp).toInt() })
         }
         // 多账号：标出这单属于哪个账号 —— 第4栏混合列表就靠它区分「哪个包裹是哪个号的」
         val accLabel = pkg.optString("accountLabel")
@@ -17092,8 +17325,8 @@ class MainActivity : Activity() {
                             //   下一次渲染就把它顶回来（用户实测"删了还在"）。
                             val ids = LinkedHashSet<String>(parcelIds(src, pkg))
                             if (code.isNotEmpty()) ids.add(code)
-                            pickupMutedAdd(key)
-                            ids.forEach { pickupMutedAdd(it) }
+                            // ★★ v1.4.9：一条记录装下这件包裹的全部身份（不再写三个扁平键）
+                            mutePackage(src, pkg)
                             // 缓存：键精确命中，或该件任一身份命中 ⇒ 两个来源的副本一起清
                             for ((k, c) in PddCodeStore.all(this@MainActivity)) {
                                 if (k == key || c.code in ids || c.waybill in ids ||

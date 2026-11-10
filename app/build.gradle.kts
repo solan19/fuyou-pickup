@@ -215,8 +215,8 @@ android {
         //   用户于是觉得“怎么点都取消不掉”。改成渲染前按 PddCodeStore 对齐 + 判定以磁盘为准。
         // v1.4.8：「没取件却显示已取件」—— TrackFetcher 把含"驿站/代收点"的**签收轨迹**当站名写进
         //   station，卡片副标题就显示「已取件…已领取」。新增 StationNames 判定，写读两侧都过滤。
-        versionCode = 727
-        versionName = "1.4.8"
+        versionCode = 728
+        versionName = "1.4.9"
     }
 
     buildTypes {

@@ -72,13 +72,15 @@ class TrackWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         //   于是这里**永远是空集**：后台不知道用户删过哪些件，还把它们当"缺码在途件"补码补回来，
         //   补回的码带"已领取"轨迹又被自动打上「已取件」灰标 ⇒ 删掉的件过一会儿又回到途中栏
         //   （同志 2026-11-09 报的那条链，一字不差）。
-        val mutedUi = MuteStore.all(ctx) + MuteStore.hidden(ctx)
-        val freshFiltered = fresh.filter { it -> "${it.src}:${it.no}" !in mutedUi }
+        // ★★ v1.4.9：黑名单改成**按包裹记录**判定（见 MuteStore）。这里只按
+        //   「运单号」这一级弱身份问一次：后台拿不到取件码/驿站，按码判会误伤复用码的新件。
+        fun mutedOne(src: String, no: String): Boolean = MuteStore.blocks(ctx, src, "", no, "", "") != null
+        val freshFiltered = fresh.filter { it -> !mutedOne(it.src, it.no) }
         if (freshFiltered.size != fresh.size) {
             Log.i(TAG, "黑名单剔除 ${fresh.size - freshFiltered.size} 条（不上报/不通知）")
         }
         val filteredSources = fetchResult.sources.mapValues { (_, source) ->
-            val items = source.items.filter { "${it.src}:${it.no}" !in mutedUi }
+            val items = source.items.filter { !mutedOne(it.src, it.no) }
             val hasMutedItems = items.size != source.items.size
             source.copy(
                 items = items,
