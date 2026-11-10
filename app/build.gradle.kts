@@ -192,8 +192,19 @@ android {
         // ★★ vc690：同志定 —— 对外版本 **1.2**，内部 versionCode **690**（紧接着历史的 682 往上）。
         //   以后每版在 690 基础上 +1；任何 ≤689 的旧包都无法覆盖安装。
         // ★★ vc691/692 → 对外 **1.2.5**，内部 **691**（同志 2026-11-04 14:44 要求提版本）。
-        versionCode = 723
-        versionName = "1.4.4"
+        // v1.4.5：★★ 在途快递 11 件塌成 1 件的根因修复（不是兜底，是堵源头）：
+        //   ① dedupKey：加 validNo() 闸 —— optString() 读到 JSON null 返回**字符串 "null"**
+        //      （不是空串，isNotEmpty()=true），加上 normNo() 会把 "-" / "—" / "(无)" 滤成空串
+        //      ⇒ 缺号的卡全拿到同一个键 `W:NULL` / `W:` ⇒ 整批并成一张。
+        //      parcelIds() 早就防过 "null"，dedupKey 一直漏着同一道闸。
+        //   ② dedupKey 增加 realWaybill 兜底（订单列表自带的真运单号）。
+        //   ③ applyTransitTrace：**无效运单号绝不写回 waybillNo** —— waybillNo 同时是跨源去重主键，
+        //      以前无条件覆盖，一批卡的主键被涂成同值，这是身份污染的源头。
+        //   ④ 拼多多在途卡补 put("orderSn")：waybillNo 被改成真运单号后仍有稳定锚点。
+        //   ⑤ TransitTerminal「豁免」日志字段名修正（sn/waybill → orderSn/waybillNo，
+        //      原来永远打空，导致排查时误判成"标识全空"）。
+        versionCode = 724
+        versionName = "1.4.5"
     }
 
     buildTypes {

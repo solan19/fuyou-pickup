@@ -776,6 +776,11 @@ class MainActivity : Activity() {
                                 put("latest", t.latest)
                                 put("trackLink", "")
                                 put("waybillNo", t.orderSn)
+                                // ★★ v1.4.5：**把订单号单独留一份**。
+                                //   以前只在 waybillNo 里塞订单号当占位：补完轨迹 waybillNo 被改成真运单号后，
+                                //   这张卡就再没有稳定锚点（pickKey/parcelIds 的 pdd 分支读 orderSn 恒空），
+                                //   主键一漂，去重就可能把别件认成同一件。orderSn 写死在这里，永不改写。
+                                put("orderSn", t.orderSn)
                                 put("phone", t.phone)
                                 // ★ vc252：订单列表接口自带的真运单号 + 物流页直链
                                 //   （有它们就不用开订单详情页去"点进去抠"了，见 enhancePddTransitTraces）
@@ -803,6 +808,7 @@ class MainActivity : Activity() {
                                     put("latest", t.latest)
                                     put("trackLink", "")
                                     put("waybillNo", t.orderSn)
+                                    put("orderSn", t.orderSn)   // ★★ v1.4.5：稳定锚点，永不改写
                                     put("phone", t.phone)
                                     put("realWaybill", t.waybill)
                                     put("expressUrl", t.expressUrl)
@@ -1061,10 +1067,25 @@ class MainActivity : Activity() {
         gen: Int, orderSn: String, waybill: String, latest: String, lines: String = ""
     ): Boolean {
         if (gen != transitEnhanceGen || transitLayer == null) return false
+        // ★★ v1.4.5：**没有有效运单号就绝不写主键** —— 这是「11 件在途塌成 1 件」的源头。
+        //   以前无条件 `pkg.put("waybillNo", waybill)`，而 `waybillNo` 同时是这张卡的
+        //   **跨源去重主键**：物流页解析失败 / 缓存里存的是 "null"·"暂无"·"" 时，
+        //   一批卡的主键被涂成同一个值 ⇒ `跨源去重 11 → 1（合并 10 条）` ⇒ 界面只剩 1 张。
+        //   v1.4.4 是在去重之后加「塌缩就放弃去重」兜底，这里是从源头堵住身份污染。
+        val wb = waybill.trim()
+        val okWb = validNo(wb)
+        if (!okWb) {
+            Log.w("TransitEnhance", "$orderSn 运单号无效(\"$wb\")，不写回主键，只补轨迹")
+        }
         var hit = false
         for (pkg in pddTransit) {
             if (pkg.optString("waybillNo") == orderSn) {
-                pkg.put("waybillNo", waybill)
+                if (okWb) {
+                    pkg.put("waybillNo", wb)
+                    if (pkg.optString("realWaybill").isEmpty()) pkg.put("realWaybill", wb)
+                }
+                // 订单号占位始终补齐：waybillNo 飘走之后，parcelIds/pickKey 还能靠它认人
+                if (!validNo(pkg.optString("orderSn"))) pkg.put("orderSn", orderSn)
                 pkg.put("latest", latest)
                 if (lines.isNotEmpty()) pkg.put("traceLines", lines)
                 hit = true
@@ -1979,8 +2000,8 @@ class MainActivity : Activity() {
                 val orderStatus = q.optString("statusText")
                 if (orderWaiting.any { orderStatus.contains(it) }) {
                     Log.i("TransitTerminal",
-                        "豁免[订单待收货] src=${q.optString("src")} sn=${q.optString("sn")} " +
-                        "wb=${q.optString("waybill")} 状态=「${orderStatus}」")
+                        "豁免[订单待收货] src=${q.optString("src")} sn=${q.optString("orderSn")} " +
+                        "wb=${q.optString("waybillNo")} 状态=「${orderStatus}」")
                     return@removeAll false
                 }
                 val t = q.optString("statusText") + " " + q.optString("latest") + " " +
@@ -13266,22 +13287,46 @@ class MainActivity : Activity() {
      */
     private fun normNo(s: String): String = s.filter { it.isLetterOrDigit() }.uppercase()
 
+    /**
+     * ★★ v1.4.5：**这个值能不能当单号用**。
+     *
+     * 为什么必须单独立一道判据（v1.4.3 在途 11 件塌成 1 件的根因）：
+     *  · `org.json` 的 `optString()` 读到 JSON `null` 返回的是**字符串 "null"**，不是空串
+     *    ⇒ `"null".isNotEmpty() == true` ⇒ 所有缺号的卡拿到同一个键 `W:NULL` ⇒ 整批并成一张。
+     *    `parcelIds()` 早就防过这个坑（`s != "null"`），`dedupKey()` 一直漏着同一道闸。
+     *  · 归一化 `normNo()` 会把 `-`、`—`、`*`、`(无)` 这类占位符滤成**空串**
+     *    ⇒ 只看 `isNotEmpty()` 仍会得到同一个空键 `W:`。所以这里连归一化结果一起判。
+     */
+    private fun validNo(s: String): Boolean {
+        val t = s.trim()
+        if (t.isEmpty()) return false
+        val low = t.lowercase()
+        if (low == "null" || low == "undefined" || low == "none" || low == "nan") return false
+        if (t == "无" || t == "暂无" || t == "(无)" || t == "-" || t == "—") return false
+        return normNo(t).isNotEmpty()
+    }
+
     /** 跨源唯一键；返回 `U:` 开头的表示「没有可比对键」⇒ 永远各自保留 */
     private fun dedupKey(p: JSONObject): String {
+        // ① 运单号（主字段 → 真运单号字段），二者都必须过 validNo 才算数
         val waybill = p.optString("waybillNo").ifEmpty { p.optString("mailNo") }
-        if (waybill.isNotEmpty()) return "W:" + normNo(waybill)
+        if (validNo(waybill)) return "W:" + normNo(waybill)
+        val real = p.optString("realWaybill")
+        if (validNo(real)) return "W:" + normNo(real)
+        // ② 取件码 + 驿站（只比码不安全：不同驿站完全可能复用同一个格口码）
         val code = p.optString("pickupCode")
-        if (code.isNotEmpty()) {
+        if (validNo(code)) {
             val st = p.optString("stationText").ifEmpty { p.optString("nickName") }
             if (st.isNotEmpty()) return "C:" + normNo(code) + ":" + st.take(20)
         }
+        // ③ 各源自己的稳定标识
         val src = p.optString("src")
         val own = when (src) {
             "pdd" -> p.optString("orderSn")
             "cainiao" -> cainiaoKey(p)
             else -> p.optString("waybillNo").ifEmpty { p.optString("orderSn") }
         }
-        return if (own.isEmpty()) "U:${System.identityHashCode(p)}" else "S:$src:" + normNo(own)
+        return if (validNo(own)) "S:$src:" + normNo(own) else "U:${System.identityHashCode(p)}"
     }
 
     /** 信息完整度打分：分高的留下 */
