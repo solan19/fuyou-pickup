@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- 后台快递跟踪：有新物流动态时发通知。Android 13+ 需运行时申请（设置页里引导） -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- ★ v1.4.24：关于应用「检查更新」下载的 APK 交给系统安装器（用户点下载才触发） -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!--
         取件码上「流体云 / 状态栏实况位」。
@@ -320,5 +322,16 @@
                 <action android:name="com.agent.idcode.LIVE_DISMISS" />
             </intent-filter>
         </receiver>
+        <!-- ★ v1.4.24：更新 APK 通过 FileProvider 交给系统安装器；exported=false 只给自家授权 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/update_file_paths" />
+        </provider>
+
     </application>
 </manifest>

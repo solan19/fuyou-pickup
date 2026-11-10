@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ★ v1.4.24：关于应用「检查更新」下载的 APK 经 FileProvider 交给系统安装器。
+     只开放 App 私有外部下载目录，不暴露其它路径。 -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <external-files-path name="update_downloads" path="Download/update/" />
+</paths>
