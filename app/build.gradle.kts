@@ -250,6 +250,17 @@ android {
         //   ③ 后台运行：原来跳 ACTION_MANAGE_OVERLAY_PERMISSION（悬浮窗），本应用没声明
         //      SYSTEM_ALERT_WINDOW ⇒ 改跳各 ROM 的真自启动页（本机实测 com.oplus.battery 的
         //      StartupAppListActivity 就是「自启动」），全不认时兜到应用信息页。
+        // v1.4.24：**通知抓码平台化 + 自定义定时提醒 + 关于应用检查更新**（同志 22:43~23:12 定）。
+        //   分 8 个 vbs 提交（vbs 1..8），按同志要求**任务之间不编译、只分别提交代码**。
+        //   ① NotifyRules：10 个白名单平台（拼多多/抖音/淘宝/京东/小红书/菜鸟/丰巢/微信/快手/美团）
+        //      + 平台关键词 + 码正则（提货码/自提码/货架号/取件凭证/纯数字长码）+ 误抓过滤 + 19 条自检样例。
+        //   ② NotifyCodeSink：通知码唯一写入出口，补 MuteStore 黑名单 / 作废码 / 同码去重 / 同单号接口优先；
+        //      Cached 加 platform（兼容旧 JSON），取件码卡显示「通知·抖音」；不再落通知全文。
+        //   ③ PickupReminder：用户自定义「每天时间段 + 逐个指定时刻（最多 6 次）+ 可选一键铺点」，
+        //      独立 WorkManager 排程（轮询关掉也工作），到点补发容差 120 分钟，数据只走 PickupGate。
+        //   ④ UpdateChecker + update.json + tools/publish_update.py：版本由用户主动确认后才分发；
+        //      关于应用行内检查/下载，不弹窗、不主动通知、不自动下载安装；force 只做醒目态。
+        //   ⑤ 设置页三块 UI、自检页、debug 入口（debug_notify_text / debug_remind_now / debug_update_check）。
         // v1.4.23：**首页「在途 N 件」改走唯一裁决出口**（同志 21:35 报：真在途 6 件却显示 10 件）。
         //   根因：首页把 pddTransit+jdTransit+… 各源**拉到的商品总数**直接相加，
         //   到站待取 / 已取件 / 已签收 / 黑名单 / 非快递（多多买菜）全被算成「在途」；
@@ -309,8 +320,8 @@ android {
         //   在四条链上各判一遍，后三条（PickupPublish / LiveUpdate 补推 / IslandHelper 补推）
         //   都只判 "有码 + 未取件"、**没过黑名单**；而且 PickupPublish 用整个 PddCodeStore、
         //   补推用 ExpressStore 快照交集 ⇒ 两个数据源互相覆盖，指纹来回翻（"没遵循规则"）。
-        versionCode = 742
-        versionName = "1.4.23"
+        versionCode = 743
+        versionName = "1.4.24"
     }
 
     buildTypes {
