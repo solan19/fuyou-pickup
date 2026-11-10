@@ -1744,6 +1744,25 @@ class MainActivity : Activity() {
                         it.optString("goodsName")
                 })
         }
+        // ★★ v1.4.7：缓存里的卡也可能带着被写脏的 `traceLines`（同一段轨迹挂多单）。
+        //   判据同 loadTransitTraceCache：逐字相同的多行轨迹不可能属于两个不同包裹 ⇒ 一并剥掉，
+        //   让卡片退回显示自己的 `latest`，并由下一轮按 orderSn 重补轨迹。
+        run {
+            val byLines = HashMap<String, MutableList<JSONObject>>()
+            for (p in out) {
+                val lines = p.optString("traceLines").trim()
+                if (!lines.contains('\n')) continue
+                byLines.getOrPut(lines) { ArrayList() }.add(p)
+            }
+            var stripped = 0
+            for ((_, group) in byLines) {
+                if (group.size < 2) continue
+                for (p in group) { p.remove("traceLines"); stripped++ }
+            }
+            if (stripped > 0) {
+                Log.w("TransitCache", "清掉缓存卡上被污染的重复轨迹 $stripped 张（同一段轨迹挂了多单）")
+            }
+        }
         return out
     }
 
@@ -1774,6 +1793,28 @@ class MainActivity : Activity() {
             }
         } catch (e: Throwable) {
             Log.w("TransitCache", "读途中轨迹缓存失败: ${e.message}")
+        }
+        // ★★ v1.4.7：**清掉被污染的轨迹** —— 这是「所有卡片都是同一个物流」的收尾。
+        //   历史 bug（≤ v1.4.5）：`applyTransitTrace` 拿 `waybillNo` 当订单号匹配，而它自己又把
+        //   `waybillNo` 改写成真运单号 ⇒ 一批卡同时命中同一个键 ⇒ **同一段轨迹被写给了所有卡**，
+        //   并原样落进这份缓存。真机实证：10 张卡（运单号各不相同）显示逐字相同的
+        //   「快件正在长途运输中…距离下一站约898KM」。
+        //   判据：两个不同包裹不可能有**逐字相同的全程轨迹**。同一段多行 lines 挂在两个以上
+        //   订单号下 ⇒ 必是写脏的。无法判断它本该属于谁，所以整组丢弃，由下一轮按订单号重补
+        //   （1.4.6 起匹配键改成 orderSn，重补是 1:1 的，不会再串）。
+        run {
+            val byLines = HashMap<String, MutableList<String>>()
+            for ((k, v) in out) {
+                val lines = v.lines.trim()
+                if (!lines.contains('\n')) continue    // 单行不算证据，不动
+                byLines.getOrPut(lines) { ArrayList() }.add(k)
+            }
+            val bad = ArrayList<String>()
+            for ((_, keys) in byLines) if (keys.size >= 2) bad.addAll(keys)
+            if (bad.isNotEmpty()) {
+                for (k in bad) out.remove(k)
+                Log.w("TransitCache", "清理被污染的重复轨迹 ${bad.size} 条（同一段轨迹挂了多单）：$bad")
+            }
         }
         return out
     }
