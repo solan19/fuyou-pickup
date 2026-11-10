@@ -2042,27 +2042,32 @@ class MainActivity : Activity() {
      * @param cache 非 null ⇒ 这一趟是**拿缓存秒显**的（进页时先画出来，抓取还在后台跑）。
      *               为 null ⇒ 正常渲染，并把结果落盘供下一趟秒显。
      */
-    private fun renderInTransit(cache: ArrayList<JSONObject>? = null) {
-        val list = transitList ?: return
-        val useCache = cache != null
-        // ★ vc270d：增量渲染 —— **不再等全部源回来才画**。旧逻辑源没齐就 return，
-        //   下拉刷新瞬间 removeAllViews 清屏 + 淘宝链路 20~35s 才回来 ⇒ 屏幕长时间空白，
-        //   观感="卡片丢失"（21:58 日志实锤：下拉后 21 秒零卡片）。
-        //   现在字段里始终保留旧卡（vc270c 按源缓存）⇒ 重画时旧卡照常上屏，
-        //   哪个源回来就更新它那份，状态行显示"正在获取X物流"。
-        val allDone = !useCache && transitExpect > 0 && transitGot >= transitExpect
-        if (allDone) {
-            transitSwipe?.let { if (it.isRefreshing) it.isRefreshing = false }
-        }
-        // ★ vc232：列表要重画了，旧卡片会被丢掉 ⇒ 别再攥着它们的引用（否则收起一个已被回收的 view）
-        // ★ vc708：**只丢 View 引用、保留身份键** —— 重画后按 [expandedTransitKey] 把那张卡重新展开，
-        //   用户不会再看到"展开的卡自己合上"。
-        expandedTransitDetail = null
-        // 状态行：没全回来就显示"正在获取X物流"（但**继续画卡片**，不再 return）
-        if (!useCache && transitGot < transitExpect) {
-            setStatusText(transitStatus, transitLoadingText())
-        }
-        list.removeAllViews()
+    /**
+     * ★★ v1.4.23：**在途件数的唯一裁决出口**。
+     *
+     * 同志 21:35 报：首页「在途 N 件」把拉取到的商品总数直接相加（未过滤），
+     * 真实在途 6 件却显示 10 件。根因是首页数 `pddTransit + jdTransit + …` 的 size，
+     * 而在途页走的是「跨源去重 → [TransitRules.judge] 一次裁决 → all.size」，两条口径。
+     *
+     * 按 v1.4.13 起沉淀的规矩（同一事实只许一处判），把整段裁决搬到这里共用：
+     *   · 首页 `buildHome()` 调 [adjudicateTransit] 取 `all.size` 显示在途件数；
+     *   · 在途页 `renderInTransit()` 调同一个函数拿 `all` 去画卡、并按源写标签数字；
+     *   · 平台标签 `transitCountOf()` 读本函数写下的 [transitShownCount]。
+     * 三处永远同数，不再出现「首页 10 / 在途页 6」这种分裂。
+     *
+     * 纯计算 + 统计写入；**破坏性副作用（连续多轮自动移出名单）留给 renderInTransit** ——
+     * 首页每次 rebuild 都会调本函数，若在这里累加轮次，三轮就会误删用户的名单记录。
+     *
+     * @param cache 在途页「秒显」时传入落盘缓存；首页 / 正常渲染传 null（用内存实时各源列表）
+     */
+    private data class TransitAdjudication(
+        val all: ArrayList<JSONObject>,
+        val mergedSize: Int,
+        val blacklistSize: Int,
+        val mutedStillRunning: List<String>,
+    )
+
+    private fun adjudicateTransit(cache: ArrayList<JSONObject>? = null): TransitAdjudication {
         // ★ 合并后立刻跨源去重：同一件被两个平台抓到时只渲染一张卡（见 dedupPkgs）
         // ★ vc259 修回归（09-22 vc182「移除 EMS」时把 manualTransit 一起带出了合并列表）：
         //   手动单号从那天起"抓了也不上屏"—— fetchManualChannel 照跑、后台跟踪快照照收
@@ -2165,6 +2170,52 @@ class MainActivity : Activity() {
         }
         Log.i("TransitRules", "裁决 ${mergedTransit.size} 张 ⇒ 在途 ${all.size} 张，剔除 ${dropLog.size} 张")
         for (line in dropLog) Log.i("TransitRules", "剔 $line")
+
+        // ★ v1.4.23：按源统计写回标签数字（首页 / 在途页 / 标签共用这一份，不允许各自数原始数组）
+        transitShownCount.clear()
+        for (p in all) {
+            val s = p.optString("src")
+            transitShownCount[s] = (transitShownCount[s] ?: 0) + 1
+        }
+        transitShownReady = true
+        return TransitAdjudication(
+            all = all,
+            mergedSize = mergedTransit.size,
+            blacklistSize = blacklistNow.size,
+            mutedStillRunning = mutedStillRunning,
+        )
+    }
+
+    private fun renderInTransit(cache: ArrayList<JSONObject>? = null) {
+        val list = transitList ?: return
+        val useCache = cache != null
+        // ★ vc270d：增量渲染 —— **不再等全部源回来才画**。旧逻辑源没齐就 return，
+        //   下拉刷新瞬间 removeAllViews 清屏 + 淘宝链路 20~35s 才回来 ⇒ 屏幕长时间空白，
+        //   观感="卡片丢失"（21:58 日志实锤：下拉后 21 秒零卡片）。
+        //   现在字段里始终保留旧卡（vc270c 按源缓存）⇒ 重画时旧卡照常上屏，
+        //   哪个源回来就更新它那份，状态行显示"正在获取X物流"。
+        val allDone = !useCache && transitExpect > 0 && transitGot >= transitExpect
+        if (allDone) {
+            transitSwipe?.let { if (it.isRefreshing) it.isRefreshing = false }
+        }
+        // ★ vc232：列表要重画了，旧卡片会被丢掉 ⇒ 别再攥着它们的引用（否则收起一个已被回收的 view）
+        // ★ vc708：**只丢 View 引用、保留身份键** —— 重画后按 [expandedTransitKey] 把那张卡重新展开，
+        //   用户不会再看到"展开的卡自己合上"。
+        expandedTransitDetail = null
+        // 状态行：没全回来就显示"正在获取X物流"（但**继续画卡片**，不再 return）
+        if (!useCache && transitGot < transitExpect) {
+            setStatusText(transitStatus, transitLoadingText())
+        }
+        list.removeAllViews()
+        // ★★ v1.4.23：合并 / 去重 / 一次裁决统一走 [adjudicateTransit]，与首页在途件数同源。
+        //   这里不再数各源原始数组，也不再重复写 transitShownCount（函数里已按源统计好）。
+        val adj = adjudicateTransit(cache)
+        val all = adj.all
+        val blacklistSize = adj.blacklistSize
+        val mergedSize = adj.mergedSize
+        // ★ 破坏性副作用只在在途页发生：名单里但连着几轮仍在运输中的项，满 3 轮自动移出
+        val mutedStillRunning = adj.mutedStillRunning
+
         if (mutedStillRunning.isNotEmpty()) {
             val still = HashSet<String>()
             for (key in mutedStillRunning) {
@@ -2186,18 +2237,12 @@ class MainActivity : Activity() {
                 if (k !in still) muteRunningRounds.remove(k)
             }
         }
-        // ★ v1.4.3：标签数字 = 过滤后实际显示的卡数（和眼睛看到的对得上）
-        transitShownCount.clear()
-        for (p in all) {
-            val s = p.optString("src")
-            transitShownCount[s] = (transitShownCount[s] ?: 0) + 1
-        }
         // ★ vc697：只上屏当前平台标签的卡（合并/去重/裁决仍作用于全部来源，只在这里过一遍 src）
         val shown = ArrayList(all.filter { it.optString("src") == transitSrc })
         refreshTransitTabs()
-        Log.i("TransitDebug", "testTransit=${testTransit.size} merged=${mergedTransit.size} all=${all.size} " +
+        Log.i("TransitDebug", "testTransit=${testTransit.size} merged=${mergedSize} all=${all.size} " +
                 "pdd=${pddTransit.size} jd=${jdTransit.size} mi=${miTransit.size} " +
-                "manual=${manualTransit.size} tb=${tbTransit.size} blacklist=${blacklistNow.size}")
+                "manual=${manualTransit.size} tb=${tbTransit.size} blacklist=${blacklistSize}")
         Log.i("TransitBuild", "最终 all=${all.size} 张：" + all.joinToString(",") {
             it.optString("orderSn") + "/" + it.optString("waybillNo")
         })
@@ -2257,7 +2302,7 @@ class MainActivity : Activity() {
         val cards = ArrayList<View>()
         // ★ vc607：一行总账 —— 出现"少一张卡"时，先看这行对不对得上
         Log.i("TransitRender", "准备渲染 tab=${transitSrc} shown=${shown.size} 张" +
-                "（all=${all.size} blacklist=${blacklistNow.size}）")
+                "（all=${all.size} blacklist=${blacklistSize}）")
         for (pkg in shown) {
             val src = pkg.optString("src")
             // ★★ v1.4.13：**黑名单与"该不该在在途"已在上面 [TransitRules.judge] 判过一次**，
@@ -2559,6 +2604,9 @@ class MainActivity : Activity() {
     private var transitEnterMs: Long = 0L
     /** 各源在「过滤后实际显示」的卡数（标签数字用它，和看到的卡片数对得上） */
     private val transitShownCount = HashMap<String, Int>()
+    /** ★ v1.4.23：统计是否已由 [adjudicateTransit] 算过。
+     *  真 0 件时 map 也是空的，不能用 isEmpty() 当「没算过」—— 否则每个标签都会重跑一次裁决。 */
+    private var transitShownReady = false
     /** 名单里每条「连续仍在运输中」的轮次（连续满 3 轮 ⇒ 自动移出，防误加永久卡死） */
     private val muteRunningRounds = HashMap<String, Int>()
     private var transitGot = 0
@@ -5312,8 +5360,24 @@ class MainActivity : Activity() {
         box.addView(makeSpacer(UiTok.S12))
 
         // ---------- 「在途」分组（v2 .sect-t 在卡外） ----------
-        val transitCount = pddTransit.size + jdTransit.size + miTransit.size +
-                tbTransit.size + manualTransit.size + testTransit.size
+        // ★★ v1.4.23：这里原来把各源**拉到的商品总数**直接相加 —— 到站待取 / 已取件 /
+        //   已签收 / 黑名单 / 非快递（多多买菜）全都算进来，真在途 6 件却显示 10 件。
+        //   改走唯一裁决出口，与在途页列表、平台标签三者同数。
+        // ★ 防御：首页在 onCreate 里就跑裁决，绝不能因为一次统计异常拖垮启动
+        val homeAdj = try {
+            adjudicateTransit()
+        } catch (t: Throwable) {
+            SafeRun.w("HomeTransit", t)
+            null
+        }
+        val transitCount = homeAdj?.all?.size ?: 0
+        Log.i(
+            "HomeTransit",
+            "首页在途 ${transitCount} 件（拉取原始 " +
+                    (pddTransit.size + jdTransit.size + miTransit.size + tbTransit.size +
+                        manualTransit.size + testTransit.size) +
+                    " 张 → 去重 ${homeAdj?.mergedSize ?: 0} 张 → 裁决留 ${transitCount} 张）"
+        )
         box.addView(homeSectionLabel("在途"), LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = (UiTok.S16 * dp).toInt(); bottomMargin = (UiTok.S8 * dp).toInt() })
@@ -17002,18 +17066,14 @@ class MainActivity : Activity() {
     }
 
     /** 某个平台此刻有多少张卡（标签上的数字）。
-     *  ★ v1.4.3：优先用过滤后的**显示数**（跨源去重+剔终态+名单+已到站分流之后），
-     *  让标签和实际卡片数对得上；尚无统计（进页前一瞬）时回退源原始数。 */
+     *  ★ v1.4.3：用过滤后的**显示数**（跨源去重 + 剔终态 + 名单 + 已到站分流之后）。
+     *  ★ v1.4.23：统计由 [adjudicateTransit] 写入；首页 onCreate 就会跑一次裁决，
+     *    所以进在途页之前 map 也已经是准的。万一还没跑（极端冷启动时序），
+     *    **补跑一次裁决**，绝不再回退到未过滤的原始数组数 —— 那正是「6 件显示 10 件」的病根。 */
     private fun transitCountOf(src: String): Int {
+        if (!transitShownReady) adjudicateTransit()
         transitShownCount[src]?.let { return it }
-        return when (src) {
-            "pdd" -> pddTransit.size
-            "jd" -> jdTransit.size
-            "tb" -> tbTransit.size
-            "mi" -> miTransit.size
-            "manual" -> manualTransit.size
-            else -> 0
-        }
+        return 0
     }
 
     private fun transitTabChipText(src: String): String {

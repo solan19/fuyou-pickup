@@ -250,6 +250,17 @@ android {
         //   ③ 后台运行：原来跳 ACTION_MANAGE_OVERLAY_PERMISSION（悬浮窗），本应用没声明
         //      SYSTEM_ALERT_WINDOW ⇒ 改跳各 ROM 的真自启动页（本机实测 com.oplus.battery 的
         //      StartupAppListActivity 就是「自启动」），全不认时兜到应用信息页。
+        // v1.4.23：**首页「在途 N 件」改走唯一裁决出口**（同志 21:35 报：真在途 6 件却显示 10 件）。
+        //   根因：首页把 pddTransit+jdTransit+… 各源**拉到的商品总数**直接相加，
+        //   到站待取 / 已取件 / 已签收 / 黑名单 / 非快递（多多买菜）全被算成「在途」；
+        //   而在途页走「跨源去重 → TransitRules.judge 一次裁决 → all.size」，两条口径。
+        //   ① 把 renderInTransit 里的合并/去重/裁决整段抽成 adjudicateTransit()，
+        //      返回裁决后卡列表 + 按源统计（transitShownCount）；副作用（连续 3 轮自动移出名单）
+        //      仍只在在途页发生，首页调用不会误删名单。
+        //   ② 首页 transitCount = adjudicateTransit().all.size；平台标签 transitCountOf 也读同一份统计，
+        //      删掉「进页前回退原始数组数」的兜底（那正是 6→10 的病根），改补跑一次裁决。
+        //   ③ 新增 HomeTransit 日志：原始 X 张 → 去重 Y 张 → 裁决留 N 张，方便真机对账。
+        //   功能/抓取链一行未动，只把「哪些算在途」收敛成单一出口。本次真机离线，未装机实测。
         // v1.4.22：**v2 全页面对齐 + 卡片半融入背景 + P2 动效套件**（同志 19:00 定，手机断开后逐步修复）。
         //   ① 卡片半融入：昼卡不再是死白，改「顶 92% 白 → 底 84% 白」垂直渐变（UiTok.cardBgTop/Bottom），
         //      四角马卡龙环境光从卡后透出来；夜间保持 10% 白半透。
@@ -298,8 +309,8 @@ android {
         //   在四条链上各判一遍，后三条（PickupPublish / LiveUpdate 补推 / IslandHelper 补推）
         //   都只判 "有码 + 未取件"、**没过黑名单**；而且 PickupPublish 用整个 PddCodeStore、
         //   补推用 ExpressStore 快照交集 ⇒ 两个数据源互相覆盖，指纹来回翻（"没遵循规则"）。
-        versionCode = 741
-        versionName = "1.4.22"
+        versionCode = 742
+        versionName = "1.4.23"
     }
 
     buildTypes {
