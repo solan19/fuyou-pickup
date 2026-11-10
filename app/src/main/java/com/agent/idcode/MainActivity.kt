@@ -13370,6 +13370,25 @@ class MainActivity : Activity() {
         val out = ArrayList(byKey.values)
         val merged = list.size - out.size
         if (merged > 0) Log.i("Dedup", "跨源去重 ${list.size} → ${out.size}（合并 $merged 条）")
+        // ★★ v1.4.4：**塌缩保护** —— 去重把绝大多数件错误并成一条时，放弃去重、原样返回。
+        //   同志 2026-11-10 实测（v1.4.3）：拼多多 11 件被 `Dedup: 11→1（合并 10 条）` 塌缩成 1 件，
+        //   导致「在途快递」只剩 1 张卡、其余全消失。正常跨源去重只合并「同一件被两源各抓一次」，
+        //   绝不会把 11 件并成 1 件 ⇒ 这是 dedupKey 因字段竞态（waybillNo 等被填成同值）误判。
+        //   策略：输入>=3 且保留<一半 ⇒ 判为异常，返回原列表（宁显重复，不整批消失）。
+        //   并 dump 每张卡的键字段，留线索定位到底哪个字段被填错。
+        if (list.size >= 3 && out.size * 2 < list.size) {
+            val dump = StringBuilder()
+            for (p in source) {
+                dump.append("\n    src=").append(p.optString("src"))
+                    .append(" wb=").append(p.optString("waybillNo"))
+                    .append(" sn=").append(p.optString("orderSn"))
+                    .append(" code=").append(p.optString("pickupCode"))
+                    .append(" fromCache=").append(p.optBoolean("fromCache"))
+                    .append(" key=").append(dedupKey(p))
+            }
+            Log.i("Dedup", "塌缩异常 ${list.size}→${out.size}，放弃去重原样返回：${dump}")
+            return ArrayList(list)
+        }
         return out
     }
 
