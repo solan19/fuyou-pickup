@@ -130,6 +130,14 @@ object PddCodeStore {
                     val t = PickedStore.of(ctx, listOf(c.code, c.waybill))
                     if (t > 0L) c = c.copy(pickedAt = t)
                 }
+                // ★★ v1.4.8：**历史脏站名自愈**。1.4.8 之前 [TrackFetcher] 会把
+                //   「已取件…您的快件已领取，收件人在[代收点](菜鸟驿站)取件」这种**轨迹句**
+                //   当成站名写进来，卡片副标题于是显示"已取件"，用户以为系统判他取过件了。
+                //   读的时候直接丢掉脏值（不在这里写盘 —— all() 是高频读路径），
+                //   显示退回「无站名」，下一轮抓取会按真实站点字段重补。
+                if (c.station.isNotBlank() && StationNames.isTraceSentence(c.station)) {
+                    c = c.copy(station = "")
+                }
                 // ★ vc605：**48h 未更新且还没打灰标的条目不再返回**。
                 //   同志实测：昨天 18:54 抓到的 6 个码，今天平台已经 0 件了，首页还挂着"6 件待取"
                 //   ⇒ 观感就是"假数据"。这里只过滤不删除，真正清盘交给"平台说 0 件"那条链。

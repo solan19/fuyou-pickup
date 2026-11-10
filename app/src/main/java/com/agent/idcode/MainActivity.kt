@@ -14179,6 +14179,71 @@ class MainActivity : Activity() {
         }
     }
 
+    /**
+     * ★★ v1.4.8：**把内存卡片上的「已取件」标记与磁盘对齐**（[PddCodeStore] 是唯一真相）。
+     *
+     * ## 症状（同志 2026-11-10 报）
+     * 取件码页点「取消已取件」：toast 说成功了，卡片却照样是灰的；要杀进程重进才恢复。
+     * 更要命的是**下一次点还是走「取消」分支** —— 判定用的 `pkg.pickedAt` 是内存里的旧值，
+     * 用户于是感觉"怎么点都取消不掉"。
+     *
+     * ## 根因
+     * 标记/取消只写了 [PddCodeStore] + [PickedStore]，**没有回写内存里那批 JSONObject**；
+     * 而 [renderMerged] 全程只读 `p.optLong("pickedAt")`，一处都没回查存储。
+     * 真机实证（2026-11-10 10:28）：
+     *   `I/PickedStore: 取消已取件 3 个身份`
+     *   `I/PickupSync: 标记已取件同步：pdd:261107-067916295711958 on=false`
+     *   `I/AcctScope: 卡片按钮切换已取件：… → 同件缓存 1 条`
+     * 三条都打了，界面不动；force-stop 重启后卡片立刻恢复未取件 —— 磁盘是对的，内存是旧的。
+     *
+     * ## 做法
+     * 渲染前按「订单号 / 运单号 / 取件码」把每张卡对到缓存条目上，用缓存里的 pickedAt
+     * 覆盖内存值。一个件命中多个身份时取**最近一次**标记（与 [PickedStore.of] 同口径）。
+     * 缓存里没有这条（刚抓到、还没落盘）时**保持原值不动**，免得把实时卡误判成未取件。
+     */
+    private fun syncPickedFlagsFromStore() {
+        val store = try {
+            PddCodeStore.all(this)
+        } catch (t: Throwable) {
+            SafeRun.w("PickupSync", t)
+            return
+        }
+        if (store.isEmpty()) return
+        // 索引：键名去前缀（pdd:订单号 → 订单号）+ 取件码 + 运单号 → 打标时刻
+        val idx = HashMap<String, Long>(store.size * 3)
+        for ((k, c) in store) {
+            val sn = k.substringAfter(':', k)
+            if (sn.isNotEmpty()) idx[sn] = c.pickedAt
+            if (c.code.isNotBlank()) idx[c.code] = c.pickedAt
+            if (c.waybill.isNotBlank()) idx[c.waybill] = c.pickedAt
+        }
+        var fixed = 0
+        fun sync(list: List<JSONObject>) {
+            for (p in list) {
+                var v = 0L
+                var hit = false
+                for (id in parcelIds(p.optString("src"), p)) {
+                    val t = idx[id] ?: continue
+                    hit = true
+                    if (t > v) v = t
+                }
+                if (!hit) continue
+                if (p.optLong("pickedAt", 0L) != v) {
+                    p.put("pickedAt", v)
+                    fixed++
+                }
+            }
+        }
+        sync(pddPkgs)
+        sync(cainiaoPkgs)
+        sync(jdPkgs)
+        sync(miPkgs)
+        sync(manualPkgs)
+        sync(tbTransit)
+        sync(tbPendingCards.values.toList())
+        if (fixed > 0) Log.i("PickupSync", "渲染前对齐已取件标记：修正 $fixed 张卡")
+    }
+
     private fun renderMerged() {
         try {
             LogEvents.event(this, "render", mapOf(
@@ -14188,6 +14253,9 @@ class MainActivity : Activity() {
         } catch (t: Throwable) { SafeRun.w("MainActivity", t) }
         val list = pickupListContainer ?: return
         cancelPickupTimeout()
+
+        // ★★ v1.4.8：渲染前先把「已取件」标记跟磁盘对齐 —— 否则"取消已取件"当场不生效。
+        syncPickedFlagsFromStore()
 
         // ★ vc270n：一眼看出"哪个源是空的" —— 本项目已三次栽在静默丢弃上
         //   （vc182 手动单号被误伤 / 盲试假轨迹 / 在途不显示无法定位），
@@ -14727,10 +14795,14 @@ class MainActivity : Activity() {
         // ★★ vc634：手动单号（快递100）不是驿站件 ⇒ 固定归"手动单号"，别被 stationText
         //   里的杂字段误分成"运单号添加"这种怪组（同志 13:08 截图里就多出这么一组）。
         if (p.optString("src") == "manual") return "手动单号"
-        val raw = p.optString("stationText")
-            .ifEmpty { p.optString("stationName") }
-            .ifEmpty { p.optString("nickName") }
-            .trim()
+        // ★★ v1.4.8：三个来源都先过 [StationNames.clean] —— 签到轨迹（"已取件…已领取…"）
+        //   不算站名，否则卡片副标题会写着"已取件"，用户以为系统判他取过件了
+        //   （同志 2026-11-10 报"显示已取件，但我没有取件"）。脏值跳过、换下一个来源。
+        val raw = listOf(
+            p.optString("stationText"),
+            p.optString("stationName"),
+            p.optString("nickName")
+        ).map { StationNames.clean(it) }.firstOrNull { it.isNotEmpty() }.orEmpty()
         if (raw.isEmpty()) return ""
         val name = extractStationName(raw)
         if (name.isEmpty() || isNonPlaceStationLabel(name)) return ""
@@ -15775,7 +15847,6 @@ class MainActivity : Activity() {
             val src = pkg.optString("src")
             val code = pkg.optString("pickupCode")
             val sn = pkg.optString("waybillNo").ifEmpty { pkg.optString("realWaybill") }
-            val isPicked = pkg.optLong("pickedAt", 0L) != 0L
             // ★ v1.3.3：键统一走解析器（原来自己拼 waybillNo 优先，与缓存键口径不一致 ⇒ 偶发"查不到"）
             val k = resolvePickupKeyForCard(src, pkg).orEmpty()
             val c = if (k.isNotEmpty()) PddCodeStore.get(this, k) else null
@@ -15783,6 +15854,10 @@ class MainActivity : Activity() {
                 appToast(this, "这单没有取件码缓存，没法标记")
                 return
             }
+            // ★★ v1.4.8：**开关状态以磁盘为准**，不再读 `pkg.pickedAt` 这个内存值。
+            //   原来读内存：取消成功后内存没同步 ⇒ 下一次点仍然判成"已取件"⇒ 又走取消分支
+            //   ⇒ 用户看到的就是"怎么点都取消不掉"（真机 2026-11-10 复现）。
+            val isPicked = c.pickedAt != 0L
             val ids = LinkedHashSet<String>(parcelIds(src, pkg))
             if (code.isNotEmpty()) ids.add(code)
             if (sn.isNotEmpty()) ids.add(sn)
@@ -15800,6 +15875,8 @@ class MainActivity : Activity() {
             pickupDirty = true
             Log.i("AcctScope", "卡片按钮切换已取件：$k → 同件缓存 $hit 条")
             appToast(this, if (isPicked) "已取消「已取件」标记" else "已标记为取件（24 小时后自动清除）")
+            // ★★ v1.4.8：磁盘改完立刻把内存卡片对齐，否则 renderMerged 画的还是旧状态
+            syncPickedFlagsFromStore()
             if (pickupLayer != null) renderMerged()
             mainHandler.post { runCatching { rebuildHome() } }
         } catch (t: Throwable) {
@@ -17043,6 +17120,10 @@ class MainActivity : Activity() {
                             if (c == null) {
                                 appToast(this@MainActivity, "这单没有取件码缓存，没法标记")
                             } else {
+                                // ★★ v1.4.8：**开关状态以磁盘为准**，不再用外层那个读内存
+                                //   `pkg.pickedAt` 的 isPicked —— 取消后内存不同步时，下次长按
+                                //   仍会显示"取消已取件"并再走一遍取消 ⇒ 用户觉得"取消不掉"。
+                                val pickedNow = c.pickedAt != 0L
                                 // ★★ vc673：**标记要落到整件包裹上，不能只落当前这一条缓存**。
                                 //   同一个码常有两份缓存（拼多多一条、菜鸟一条），只标其中一条时，
                                 //   首页按码去重后留下的恰好是**没标的那条** ⇒
@@ -17050,18 +17131,18 @@ class MainActivity : Activity() {
                                 val ids = LinkedHashSet<String>(parcelIds(src, pkg))
                                 if (code.isNotEmpty()) ids.add(code)
                                 if (sn != null) ids.add(sn)
-                                val newAt = if (isPicked) 0L else System.currentTimeMillis()
+                                val newAt = if (pickedNow) 0L else System.currentTimeMillis()
                                 // ★★ vc674：**先把身份标记写掉**，再刷缓存条目。
                                 //   否则 PddCodeStore.all() 会按旧的身份标记把 pickedAt 又补回来，
                                 //   导致"取消标记"看似成功、下一次读又变回已取件。
-                                if (isPicked) PickedStore.unmark(this@MainActivity, ids)
+                                if (pickedNow) PickedStore.unmark(this@MainActivity, ids)
                                 else PickedStore.mark(this@MainActivity, ids)
                                 var hit = 0
                                 for ((ck, cc) in PddCodeStore.all(this@MainActivity)) {
                                     val same = ck == k || ck.substringAfter(':') in ids ||
                                             cc.code in ids || cc.waybill in ids
                                     if (!same) continue
-                                    setManualPicked(ck, !isPicked)
+                                    setManualPicked(ck, !pickedNow)
                                     // ★ vc470：取消标记必须**强制清 0**，不能被「保留旧标记」兜住
                                     PddCodeStore.putForce(
                                         this@MainActivity, ck, cc.copy(pickedAt = newAt)
@@ -17070,11 +17151,13 @@ class MainActivity : Activity() {
                                 }
                                 // ★ vc673：动过标记 ⇒ 关层时重建首页，避免首页还挂着这张码
                                 pickupDirty = true
-                                Log.i("AcctScope", "标记${if (isPicked) "取消" else ""}已取件：$k → 同件缓存 $hit 条")
+                                Log.i("AcctScope", "标记${if (pickedNow) "取消" else ""}已取件：$k → 同件缓存 $hit 条")
                                 appToast(
                                     this@MainActivity,
-                                    if (isPicked) "已取消「已取件」标记" else "已标记为取件（24 小时后自动清除）"
+                                    if (pickedNow) "已取消「已取件」标记" else "已标记为取件（24 小时后自动清除）"
                                 )
+                                // ★★ v1.4.8：磁盘改完立刻对齐内存卡片，界面才会当场变
+                                syncPickedFlagsFromStore()
                                 if (pickupLayer != null) renderMerged()
                                 // 首页此刻若可见，立即跟着更新（不用等关层）
                                 mainHandler.post { runCatching { rebuildHome() } }

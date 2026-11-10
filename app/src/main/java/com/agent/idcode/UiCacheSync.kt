@@ -269,7 +269,9 @@ object UiCacheSync {
             val nc = PddCodeStore.Cached(
                 src = item.src,
                 code = item.pickupCode,
-                station = item.stationText.take(60),
+                // ★★ v1.4.8：站名只收地名，签收轨迹（"已取件…已领取…"）一律不收 ——
+                //   否则卡片副标题会显示"已取件"，用户以为系统判他取过件了。
+                station = StationNames.clean(item.stationText).take(60),
                 waybill = item.no,
                 latest = item.latest.take(220),
                 ts = System.currentTimeMillis(),

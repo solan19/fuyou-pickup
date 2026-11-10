@@ -408,12 +408,16 @@ object TrackFetcher {
         }
         val merged = items.map { it ->
             val r = byNo[it.no] ?: return@map it
+            val lines = PddTraceChannel.parseTraceLines(r.text)
             it.copy(
                 pickupCode = r.pickupCode ?: it.pickupCode,
-                latest = PddTraceChannel.parseTraceLines(r.text).firstOrNull() ?: it.latest,
-                stationText = PddTraceChannel.parseTraceLines(r.text)
-                    .firstOrNull { s -> s.contains("驿站") || s.contains("代收点") || s.contains("快递柜") }
-                    ?: it.stationText
+                latest = lines.firstOrNull() ?: it.latest,
+                // ★★ v1.4.8：**只在原本没有站名时**才从轨迹里找一个，而且必须过 [StationNames]
+                //   的"这像不像地名"判定。原来这里直接
+                //   `firstOrNull { 含"驿站" || 含"代收点" || 含"快递柜" }`
+                //   就把整句签收轨迹当站名用 ⇒ 卡片副标题显示「已取件…您的快件已领取」
+                //   ⇒ 用户以为系统判他取件了（同志 2026-11-10 报"显示已取件但我没取件"）。
+                stationText = it.stationText.ifBlank { StationNames.fromTrace(lines).orEmpty() }
             )
         }
         return EnrichmentResult(merged, partial)
