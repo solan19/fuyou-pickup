@@ -67,7 +67,20 @@ object MuteStore {
         val title: String = "",
         val ts: Long = 0L,
         val permanent: Boolean = false,
-        val legacy: Boolean = false
+        val legacy: Boolean = false,
+        /**
+         * ★★ v1.4.12：**延后生效时刻**（0 = 立即生效）。
+         *
+         * 用于「标记已取件」：同志 2026-11-10 13:08 要的是**取件后卡片照旧留 24 小时**
+         * （给他核对"哪些还没确认收货"），24 小时之后才真正从各栏消失、并且不再被重新抓回来。
+         * 于是标记动作写一条名单记录，但把生效时间推到 `now + 24h` —— 时间没到之前
+         * [blocks] 一律不拦，卡片正常显示；时间一到它自动接管（等价于用户手动删掉）。
+         *
+         * 为什么不干脆只靠 `pickedAt` 标记：缓存条目会被重建（新键、pickedAt=0），
+         * 标记一丢，这单就又从平台被抓回在途栏 —— 那是 v1.4.10 里「标记过的件又冒出来」
+         * 的根因。名单记录按**订单号**认人，重建多少次都认得。
+         */
+        val holdUntil: Long = 0L
     ) {
         /** 给页面看的一行身份摘要 */
         fun identityLine(): String {
@@ -98,6 +111,7 @@ object MuteStore {
             put("ts", ts)
             put("permanent", permanent)
             put("legacy", legacy)
+            if (holdUntil > 0L) put("holdUntil", holdUntil)
         }
 
         companion object {
@@ -111,7 +125,8 @@ object MuteStore {
                 title = o.optString("title"),
                 ts = o.optLong("ts"),
                 permanent = o.optBoolean("permanent"),
-                legacy = o.optBoolean("legacy")
+                legacy = o.optBoolean("legacy"),
+                holdUntil = o.optLong("holdUntil", 0L)
             )
         }
     }
@@ -270,6 +285,9 @@ object MuteStore {
         val now = System.currentTimeMillis()
         for (e in entries(c)) {
             if (!srcCompatible(e.src, src)) continue
+            // ★★ v1.4.12：「留 24 小时」型的记录（标记已取件写进来的）在生效时刻前**不拦**，
+            //   卡片照常显示给用户核对；时间一到自动接管。
+            if (e.holdUntil > 0L && now < e.holdUntil) continue
             val eos = norm(e.orderSn)
             val ewb = norm(e.waybill)
             val ecd = norm(e.code)
@@ -316,7 +334,13 @@ object MuteStore {
                 station = exist.station.ifBlank { e.station },
                 title = exist.title.ifBlank { e.title },
                 ts = now,
-                permanent = exist.permanent || e.permanent
+                permanent = exist.permanent || e.permanent,
+                // ★ v1.4.12：两边都有生效时刻时取**更早**的（不要因为重复写入把"立即生效"推后）
+                holdUntil = when {
+                    exist.holdUntil <= 0L -> e.holdUntil
+                    e.holdUntil <= 0L -> exist.holdUntil
+                    else -> minOf(exist.holdUntil, e.holdUntil)
+                }
             )
             list[list.indexOf(exist)] = merged
         } else {
@@ -325,7 +349,51 @@ object MuteStore {
         saveAll(c, list)
         android.util.Log.i(
             "MuteStore",
-            "加入屏蔽记录 ${e.src}/${e.orderSn} 运单=${e.waybill} 码=${e.code} 共 ${list.size} 条"
+            "加入屏蔽记录 ${e.src}/${e.orderSn} 运单=${e.waybill} 码=${e.code} " +
+                    "生效=${if (e.holdUntil > 0L) "${(e.holdUntil - System.currentTimeMillis()) / 60_000} 分钟后" else "立即"} " +
+                    "共 ${list.size} 条"
+        )
+    }
+
+    /**
+     * ★★ v1.4.12：**标记「已取件」= 按之前的形式进黑名单**（同志 2026-11-10 13:08）。
+     *
+     * 之前（v1.3.x）的做法是往名单里塞三个身份：`pdd:订单号`、`源:运单号`、裸取件码；
+     * 现在是一条记录装下全部身份，判定强度仍按订单号 > 运单号 > 取件码。
+     *
+     * 与旧版的唯一差别：**生效时间推到 24 小时后**（[Entry.holdUntil]）——
+     * 卡片照旧留在取件码页让他核对，24 小时后自动退场且不会被重新抓回来。
+     * 取消标记时用同一条 id 调 [remove] 即可。
+     *
+     * @param id 稳定 id，约定 `picked:<缓存键>`，方便取消时精确移除
+     */
+    fun addPicked(
+        c: Context,
+        id: String,
+        src: String,
+        orderSn: String,
+        waybill: String,
+        code: String,
+        station: String,
+        title: String,
+        holdMs: Long
+    ) {
+        if (!usable(orderSn) && !usable(waybill) && !usable(code)) return
+        val now = System.currentTimeMillis()
+        addEntry(
+            c,
+            Entry(
+                id = id,
+                src = src,
+                orderSn = orderSn.trim(),
+                waybill = waybill.trim(),
+                code = code.trim(),
+                station = station.trim(),
+                title = title.trim(),
+                ts = now,
+                permanent = false,
+                holdUntil = if (holdMs > 0L) now + holdMs else 0L
+            )
         )
     }
 

@@ -10797,9 +10797,10 @@ class MainActivity : Activity() {
                 if (total == 0) {
                     appToast(this, "没有已取件的快递")
                 } else {
-                    // ★★ v1.4.11：已取件的卡按口径不再显示在列表里，这里只清它们的记录。
+                    // ★★ v1.4.12：已取件的卡重新上屏（留 24h），这里清的就是它们。
                     val msg = "有 $total 条「已取件」的取件码记录。\n\n" +
-                            "删除后不会再出现在取件码页与首页；待取的不会动。"
+                            "删除后立即从取件码页与首页撤掉，并按之前的规则进黑名单（不会再被重新抓回来）。\n" +
+                            "待取的不会动。"
                     AlertDialog.Builder(this)
                         .setTitle("清已取件")
                         .setMessage(msg)
@@ -10807,18 +10808,34 @@ class MainActivity : Activity() {
                             var del = 0
                             for ((k, c) in PddCodeStore.all(this)) {
                                 if (c.pickedAt != 0L) {
-                                    // ★★ v1.4.10：**只删缓存，不再写黑名单**。
+                                    // ★★ v1.4.12（同志 13:08）：「或者**手动删除**，并且需要按之前的形式
+                                    //   进入黑名单」——手删 = 立即进名单（[MuteStore.Entry.holdUntil] 传 0）。
                                     //
-                                    // 事故（同志 2026-11-10「皇帝柑还没到，在途看不到」）：
-                                    // v1.3.8~v1.4.9 这里把每条"已取件"都写成一条名单记录，
-                                    // 订单号身份又**永久有效** ⇒ 点一次「清已取 5」= 一次性把
-                                    // 5 个包裹永久屏蔽（连在途栏一起消失）。
-                                    // 而那批 pickedAt 里有系统误标的历史包袱（v1.4.8 之前的
-                                    // "没取件却显示已取件"），被屏蔽的正是还没到的货。
-                                    //
-                                    // 现在的口径：清已取 = 清掉这些标记过的**缓存**。
-                                    // 平台若还认为这单待取，下一轮抓取会重新出现 —— 那是对的，
-                                    // 说明确实没取。真要它永远消失，请长按那张卡删除（那才是用户明确意图）。
+                                    //   与 v1.4.10 那次"索性不写名单"的区别：那次写进去的是**永久**记录
+                                    //   （订单号身份永不过期），一次「清已取 5」会把 5 个包裹永久屏蔽，
+                                    //   连还没到的货一起消失（皇帝柑事故）。现在这批记录由**明确的用户标记**
+                                    //   产生，且可在黑名单页单独「移出」，误伤可恢复。
+                                    val osn = k.substringAfter(':')
+                                    MuteStore.addPicked(
+                                        c = this,
+                                        id = "picked:$k",
+                                        src = c.src,
+                                        orderSn = osn,
+                                        waybill = if (c.waybill == osn) "" else c.waybill,
+                                        code = c.code,
+                                        station = c.station,
+                                        title = PddTitleStore.get(this, osn),
+                                        holdMs = 0L
+                                    )
+                                    // ★ v1.4.12：**同时把「已取件」标记本身也取消** ——
+                                    //   否则 [PddCodeStore.all] 会按身份回查 [PickedStore] 把它补回来，
+                                    //   下一轮抓取又变成一张灰卡，"清已取"等于没清。
+                                    val ids = LinkedHashSet<String>()
+                                    ids.add(osn)
+                                    if (c.waybill.isNotBlank()) ids.add(c.waybill)
+                                    if (c.code.isNotBlank()) ids.add(c.code)
+                                    PickedStore.unmark(this, ids)
+                                    setManualPicked(k, false)
                                     PddCodeStore.remove(this, k)
                                     del++
                                 }
@@ -12959,8 +12976,19 @@ class MainActivity : Activity() {
                 })
                 // 次行 = 来源 + 各身份（订单号/运单号/取件码/驿站）
                 val ids = e.identityLine()
+                // ★★ v1.4.12：标记「已取件」写进来的记录要标清去向 ——
+                //   holdUntil 未到 = 卡片还在列表里给他核对，到点才真正拦；
+                //   否则用户会奇怪"我明明标了已取件，它怎么还在黑名单里"。
+                val pickedNote = when {
+                    // id 以 `picked:` 开头的是「标记已取件」/「清已取」写进来的（长按删除的是 m…）
+                    !e.id.startsWith("picked:") -> ""
+                    e.holdUntil > System.currentTimeMillis() ->
+                        "已取件·剩 ${((e.holdUntil - System.currentTimeMillis()) / TimeGates.HOUR_MS) + 1}h"
+                    else -> "已取件·已撤"
+                }
                 textCol.addView(TextView(this).apply {
-                    text = listOf(srcDisplayName(e.src), ids).filter { it.isNotBlank() }.joinToString(" · ")
+                    text = listOf(srcDisplayName(e.src), ids, pickedNote)
+                        .filter { it.isNotBlank() }.joinToString(" · ")
                     textSize = UiTok.T11
                     setTextColor(cTextTertiary)
                     maxLines = 2
@@ -14976,15 +15004,13 @@ class MainActivity : Activity() {
         //     的 W: 键负责（下一轮渲染就会跟菜鸟同运单卡合并），不靠上屏。
         val visible = ArrayList<JSONObject>()
         for (p in pending) {
-            // ★★ v1.4.11（同志 12:54 定的口径）：**取件之后，取件码页与首页都要撤掉**。
-            //   「当我取件后、或购物平台显示已签收、或我手动点已签收，则取件码页面和首页
-            //    同步撤掉取件码」—— 所以已打「已取件」标记的卡不在这里上屏。
-            //   ⚠️ 只是不上屏，**缓存不删**：万一误标（比如复用码被张冠李戴），
-            //   24h 内还能在缓存里找回来，也避免补码链把它当新件重抓。
-            if (p.optLong("pickedAt", 0L) != 0L) {
-                Log.i("PickupCard", "已标记取件，不上屏：${p.optString("src")} ${p.optString("pickupCode")}")
-                continue
-            }
+            // ★★ v1.4.12（同志 13:08）：「标记完以后还和之前一样**留存 24 小时**，或者手动删除」——
+            //   所以打了「已取件」的卡**照旧上屏**（灰标 + 码划掉），24h 后由
+            //   [PickedStore] / [MuteStore] 两边同时让它退场（时长都是 PICKED_TAG_KEEP_HOURS）。
+            //   v1.4.11 那版是"当场消失"，结果他取完件想核对「哪些还没确认收货」时无处可查。
+            //
+            //   ⚠️ 灰卡只影响显示，**不进「N 件待取」**（见下面的 activeCount），
+            //   也不进首页大数字、不进流体云（PickedStore 过期 + 黑名单 24h 后接管）。
             val bare = p.optString("src") == "pdd" &&
                     p.optString("pickupCode").isEmpty() &&
                     p.optString("goodsName").isEmpty() &&
@@ -16282,6 +16308,39 @@ class MainActivity : Activity() {
             if (sn.isNotEmpty()) ids.add(sn)
             val newAt = if (isPicked) 0L else System.currentTimeMillis()
             if (isPicked) PickedStore.unmark(this, ids) else PickedStore.mark(this, ids)
+            // ★★ v1.4.12（同志 13:08）：「标记完以后……**并且需要按之前的形式进入黑名单**」。
+            //   旧版（v1.3.x）打「已取件」时往名单里塞三个身份：`pdd:订单号`、`源:运单号`、裸取件码；
+            //   现在一条记录装下全部身份（订单号 > 运单号 > 取件码 的强度规则不变），
+            //   只把**生效时间推到 24 小时后**——这 24 小时里卡片照旧显示给他核对，
+            //   到点后自动退场，并且**不管缓存怎么重建都不会再被当成待取件抓回来**
+            //   （这正是 v1.4.10「标记过的件又从在途栏冒出来」的根因：只靠 pickedAt 标记，
+            //    缓存条目一重建标记就丢了，名单按订单号认人才不会）。
+            val muteId = "picked:$k"
+            val orderSn = pkg.optString("orderSn").ifEmpty { pkg.optString("order_sn") }
+            // ★ v1.4.12：有些卡的 `waybillNo` 里装的其实就是订单号（历史数据被写过一次），
+            //   直接塞进名单的运单号字段会让"运单号身份"和"订单号身份"撞在一起 —— 去掉。
+            val wbRaw = pkg.optString("realWaybill").ifEmpty { pkg.optString("waybillNo") }
+            val wb = if (wbRaw == orderSn || wbRaw == code) "" else wbRaw
+            if (isPicked) {
+                MuteStore.remove(this, muteId)
+                // 兜底：万一 id 因缓存键变化对不上，按订单号再删一次
+                if (orderSn.isNotBlank()) MuteStore.removeKey(this, "pdd:$orderSn")
+                Log.i("MuteStore", "取消已取件 → 移出名单 $muteId")
+            } else {
+                MuteStore.addPicked(
+                    c = this,
+                    id = muteId,
+                    src = src,
+                    orderSn = orderSn,
+                    waybill = wb,
+                    code = code,
+                    station = pkg.optString("stationText")
+                        .ifEmpty { pkg.optString("stationName") }
+                        .ifEmpty { pkg.optString("nickName") },
+                    title = pkg.optString("goodsName"),
+                    holdMs = TimeGates.PICKED_TAG_KEEP_MS
+                )
+            }
             var hit = 0
             for ((ck, cc) in PddCodeStore.all(this)) {
                 val same = ck == k || ck.substringAfter(':') in ids ||
@@ -16293,7 +16352,11 @@ class MainActivity : Activity() {
             }
             pickupDirty = true
             Log.i("AcctScope", "卡片按钮切换已取件：$k → 同件缓存 $hit 条")
-            appToast(this, if (isPicked) "已取消「已取件」标记" else "已标记为取件（24 小时后自动清除）")
+            appToast(
+                this,
+                if (isPicked) "已取消「已取件」标记"
+                else "已标记取件 · 卡片保留 24 小时后自动撤掉"
+            )
             // ★★ v1.4.8：磁盘改完立刻把内存卡片对齐，否则 renderMerged 画的还是旧状态
             syncPickedFlagsFromStore()
             if (pickupLayer != null) renderMerged()
