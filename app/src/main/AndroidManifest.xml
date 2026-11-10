@@ -212,6 +212,15 @@
             </intent-filter>
         </receiver>
 
+        <!-- ★ v1.4.25：定时提醒的准时闹钟（用户闹钟通道，ColorOS 上不会被推迟 72h） -->
+        <receiver
+            android:name=".RemindAlarmReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.agent.idcode.action.REMIND_TICK" />
+            </intent-filter>
+        </receiver>
+
         <!--
             ★★★ 常驻前台服务（vc264，手册第 1 层）
             低打扰常驻通知 + startForeground ⇒ 扛一键清理、扛从最近任务划掉。

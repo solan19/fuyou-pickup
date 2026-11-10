@@ -33,6 +33,12 @@ class TrackWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
 
     override suspend fun doWork(): Result {
         val ctx = applicationContext
+        // ★ v1.4.25：任意一次后台轮询都顺带检查到点提醒（即使本轮因低电量/名单为空跳过抓取）
+        try {
+            PickupReminder.tick(ctx, "track")
+        } catch (t: Throwable) {
+            SafeRun.w(TAG, t)
+        }
         val interval = ExpressStore.pollIntervalMin(ctx)
         if (interval <= 0) {
             Log.i(TAG, "轮询已关闭（间隔=0），跳过")

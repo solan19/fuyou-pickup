@@ -21,9 +21,12 @@ import xml.etree.ElementTree as ET
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KT = os.path.join(ROOT, "app/src/main/java/com/agent/idcode")
 FAIL = []
+TOTAL = 0
 
 
 def check(name, cond, detail=""):
+    global TOTAL
+    TOTAL += 1
     print(("PASS " if cond else "FAIL ") + name + (("  " + detail) if detail else ""))
     if not cond:
         FAIL.append(name)
@@ -171,14 +174,15 @@ check("仅当有件才提醒（数据门槛独立于时刻）", True,
 # ---------------- ③ 更新清单 schema ----------------
 raw = open(os.path.join(ROOT, "update.json"), encoding="utf-8").read()
 u = json.loads(raw)
-check("清单 schema=1 且初始未分发",
-      u.get("schema") == 1 and u.get("published") is False and u.get("versionCode") == 0)
+check("清单 schema=1 且字段类型正确",
+      u.get("schema") == 1 and isinstance(u.get("published"), bool)
+      and isinstance(u.get("versionCode"), int) and u.get("versionCode", 0) > 0)
 required = {"schema", "published", "versionCode", "versionName", "apkUrl",
             "sha256", "notes", "force", "minSupport", "publishedAt"}
 check("清单字段齐全", set(u.keys()) == required, str(sorted(set(u.keys()) ^ required)))
 
 
-def verdict(info, current=742):
+def verdict(info, current=743):
     if not info.get("published"):
         return "NotPublished"
     if info.get("versionCode", 0) <= 0 or not info.get("apkUrl", "").startswith("https://"):
@@ -186,11 +190,11 @@ def verdict(info, current=742):
     return "Available" if info["versionCode"] > current else "UpToDate"
 
 
-check("未分发 → NotPublished", verdict(u) == "NotPublished")
-published = dict(u, published=True, versionCode=743, apkUrl="https://example.com/a.apk",
+check("未分发 → NotPublished", verdict(dict(u, published=False)) == "NotPublished")
+published = dict(u, published=True, versionCode=744, apkUrl="https://example.com/a.apk",
                  sha256="a" * 64)
-check("743 > 742 → Available", verdict(published) == "Available")
-check("742 = 742 → UpToDate", verdict(dict(published, versionCode=742)) == "UpToDate")
+check("744 > 743 → Available", verdict(published) == "Available")
+check("743 = 743 → UpToDate", verdict(dict(published, versionCode=743)) == "UpToDate")
 check("非 https 地址 → Failed", verdict(dict(published, apkUrl="http://x/a.apk")) == "Failed")
 check("force 只是展示标志（不弹窗）",
       isinstance(published.get("force"), bool) and published["force"] is False)
@@ -204,6 +208,40 @@ r = subprocess.run([sys.executable, script, "--version-code", "743", "--version-
 check("不带 --confirm 拒绝分发", r.returncode == 2 and "REFUSED" in (r.stdout + r.stderr))
 
 # ---------------- ⑤ 静态检查 ----------------
+# ---------------- ⑤' v1.4.25 三个修复的静态检查 ----------------
+remind = open(os.path.join(KT, "PickupReminder.kt"), encoding="utf-8").read()
+live = open(os.path.join(KT, "LiveUpdate.kt"), encoding="utf-8").read()
+main = open(os.path.join(KT, "MainActivity.kt"), encoding="utf-8").read()
+checker = open(os.path.join(KT, "UpdateChecker.kt"), encoding="utf-8").read()
+track = open(os.path.join(KT, "TrackWorker.kt"), encoding="utf-8").read()
+keep = open(os.path.join(KT, "KeepAlive.kt"), encoding="utf-8").read()
+mf = open(os.path.join(ROOT, "app/src/main/AndroidManifest.xml"), encoding="utf-8").read()
+
+check("tick 唯一出口在位",
+      "fun tick(ctx: Context, reason: String): Int" in remind and "@Synchronized" in remind)
+check("准点闹钟 + KEEP 策略",
+      "setAlarmClock(" in remind and "ExistingPeriodicWorkPolicy.KEEP" in remind)
+check("四条唤醒路径挂钩",
+      'PickupReminder.tick(this, "resume")' in main
+      and 'PickupReminder.tick(ctx, "track")' in track
+      and 'PickupReminder.tick(ctx, "keepalive")' in keep)
+check("闹钟 receiver 已注册",
+      ".RemindAlarmReceiver" in mf and "REMIND_TICK" in mf and "RemindAlarmReceiver" in remind)
+seg = main.split("★★ v1.4.25：定时取件提醒")[1].split("// ---- 后台快递跟踪")[0]
+check("提醒卡局部重绘、不 recreate",
+      "fun render()" in seg and "rCard.removeAllViews()" in seg and "recreate()" not in seg)
+check("recreate 兜底清 intent extras",
+      "intent?.removeExtra(HomeWidgets.EXTRA_OPEN_PICKUP)" in main)
+check("流体云重推与渠道分流",
+      "fun pulse(" in live and "RemindDelivery" in remind
+      and "canPostPromoted" in remind and "deviceAllowsIsland" in remind)
+check("普通通知让位 + 失败回退",
+      "不发普通通知" in remind and "回退普通通知" in remind)
+check("清单默认地址改公开托管",
+      "fuyou-update.app.workbuddy.host" in checker and "sharecode=" in checker)
+check("清单 sha256 为 64 位 hex",
+      bool(re.fullmatch(r"[0-9a-f]{64}", u.get("sha256", ""))))
+
 new_kt = ["NotifyRules.kt", "NotifyCodeSink.kt", "IdNotifyListener.kt",
           "PickupReminder.kt", "UpdateChecker.kt", "SquircleDrawable.kt"]
 for name in new_kt[:5]:
@@ -236,7 +274,7 @@ check("Manifest 含安装权限与 FileProvider",
       and "androidx.core.content.FileProvider" in
       open(os.path.join(ROOT, "app/src/main/AndroidManifest.xml"), encoding="utf-8").read())
 
-print("\n==== %d 项检查，%d 项失败 ====" % (len(samples) + 30, len(FAIL)))
+print("\n==== %d 项检查，%d 项失败 ====" % (TOTAL, len(FAIL)))
 for f in FAIL:
     print("  -", f)
 sys.exit(1 if FAIL else 0)

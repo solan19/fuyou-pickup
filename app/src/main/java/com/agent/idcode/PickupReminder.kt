@@ -1,11 +1,14 @@
 package com.agent.idcode
 
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.util.Log
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
@@ -30,11 +33,16 @@ import java.util.concurrent.TimeUnit
  *
  * 默认：开关关闭、窗口全天 00:00–23:59、时刻列表为空 —— 用户没配过就绝不提醒。
  *
- * ## 为什么用「15 分钟周期 Worker + 到点补发」而不是精确闹钟
- * ColorOS 上 `setExactAndAllowWhileIdle` 实测会被推迟数十小时（工程里 [KeepAlive] 有取证），
- * WorkManager 周期任务也会被系统合并/延后。所以这里不依赖"准时唤醒"，而是每次 Worker
- * 醒来都算一遍：当前时刻落在哪个 slot 之后的 [CATCHUP_MIN] 分钟内、且该 slot 当天没发过
- * ⇒ 补发一次。这样延迟唤醒不漏提醒，超过容差就安静跳过（不会半夜突然响）。
+ * ## v1.4.25：为什么「到点不响」
+ * 上一版只有一条触发链：`WorkManager` 15 分钟周期任务。实测 ColorOS 上周期任务会被
+ * 合并/推迟（工程 [KeepAlive] 里已有取证），而且 `ExistingPeriodicWorkPolicy.UPDATE`
+ * 每改一次配置就把下次运行时间重置到 +15 分钟 ⇒ 用户设的时刻到了，Worker 还没醒。
+ * 现在统一成 [tick] 一个出口，四条唤醒路径共用同一份判定与「当天该时刻只发一次」的账本：
+ *  ① [RemindScheduler.armNext] 用 `setAlarmClock` 对每个时刻排**准时**闹钟（状态栏闹钟图标是它的代价）；
+ *  ② [KeepAliveReceiver] / [TrackWorker] 任意一次现有后台唤醒顺带查一次；
+ *  ③ 用户回前台（MainActivity.onResume）立刻补一次；
+ *  ④ WorkManager 15 分钟周期继续兜底（[ExistingPeriodicWorkPolicy.KEEP] 不再被配置改动重置）。
+ * 每条路径都可能被系统延迟，但 [CATCHUP_MIN] 容差内任意一条醒来就补发，超过容差安静跳过。
  *
  * 数据源只走 [PickupGate.aliveEntries]（有码 + 未取 + 不在黑名单），不另写一份判断。
  */
@@ -65,6 +73,7 @@ object PickupReminder {
     fun setEnabled(ctx: Context, on: Boolean) {
         sp(ctx).edit().putBoolean(KEY_ENABLED, on).apply()
         Log.i(TAG, "定时提醒 = $on")
+        if (!on) sp(ctx).edit().remove(KEY_FIRED).apply()
         RemindScheduler.apply(ctx)
     }
 
@@ -175,7 +184,7 @@ object PickupReminder {
     }
 
     /**
-     * 这一轮 Worker 该不该发、发哪个时刻。
+     * 这一轮该不该发、发哪个时刻。
      * 取「已到点且未发过」里**最近**的一个；更早的过期点静默跳过，避免一次补发多条。
      */
     fun dueSlot(ctx: Context, now: Long = System.currentTimeMillis()): Int? {
@@ -195,6 +204,56 @@ object PickupReminder {
         return due
     }
 
+    /**
+     * ★ v1.4.25：下一个该响的绝对时间（给准时闹钟用）。
+     * 只看未来 3 天里最早的、该提醒日还没发过的 slot；今天全发完就排明天最早那个。
+     */
+    fun nextSlotAt(ctx: Context, now: Long = System.currentTimeMillis()): Long? {
+        if (!enabled(ctx)) return null
+        val list = slots(ctx)
+        if (list.isEmpty()) return null
+        var best: Long? = null
+        for (slot in list) {
+            for (d in 0..2) {
+                val c = Calendar.getInstance().apply {
+                    timeInMillis = now
+                    set(Calendar.HOUR_OF_DAY, slot / 60)
+                    set(Calendar.MINUTE, slot % 60)
+                    set(Calendar.SECOND, 0)
+                    set(Calendar.MILLISECOND, 0)
+                    add(Calendar.DAY_OF_YEAR, d)
+                }
+                val at = c.timeInMillis
+                if (at <= now + 30_000L) continue
+                if (firedSet(ctx, windowKey(ctx, at)).contains(slot.toString())) continue
+                val b = best
+                if (b == null || at < b) best = at
+            }
+        }
+        return best
+    }
+
+    /**
+     * ★★ v1.4.25：**所有唤醒路径的唯一出口**。
+     * 到点 → 发一次 → 立刻记账；同一进程内多条路径同时到达也只会发一次（[dueSlot] 读的
+     * 是同一份 SP 账本，@Synchronized 防并发）。返回实际提醒的件数。
+     */
+    @Synchronized
+    fun tick(ctx: Context, reason: String): Int {
+        if (!enabled(ctx)) return 0
+        val slot = dueSlot(ctx) ?: return 0
+        val n = try {
+            RemindNotifier.notifyPending(ctx)
+        } catch (t: Throwable) {
+            SafeRun.w(TAG, t)
+            0
+        }
+        // 无论有没有真的发出（可能 0 件待取），都记住这个时刻已处理，避免反复空跑
+        markFired(ctx, slot)
+        Log.i(TAG, "[$reason] 命中 ${fmt(slot)} ⇒ ${RemindDelivery.modeText(ctx)}，待取 $n 件")
+        return n
+    }
+
     /** 自检 / 设置页显示用：09:05（手工补零，避开 String.format 的重载解析差异） */
     fun fmt(minute: Int): String {
         val h = minute / 60
@@ -212,7 +271,75 @@ object PickupReminder {
     }
 }
 
-/** 汇总提醒通知：独立渠道、固定 id 覆盖式、点击直达取件码页 */
+/**
+ * ★ v1.4.25：到点提醒的**渠道分流**（同志 00:11 定）。
+ * 「开着流体云 / 超级岛、且设备确实支持」⇒ 只推实况位，不再发普通通知；
+ * 任何一路推失败 / 设备不支持 ⇒ 回退普通通知，绝不因为渠道判断把提醒弄丢。
+ */
+object RemindDelivery {
+
+    private const val TAG = "RemindDelivery"
+
+    /** 官方提升型通知（一加 ColorOS 流体云 / Android 16 promoted notification） */
+    fun liveCapable(ctx: Context): Boolean = try {
+        LiveUpdate.isEnabled(ctx) && LiveUpdate.canPostPromoted(ctx)
+    } catch (_: Throwable) {
+        false
+    }
+
+    /** 小米 HyperOS 焦点通知（超级岛） */
+    fun islandCapable(ctx: Context): Boolean = try {
+        IslandHelper.isEnabled(ctx) && IslandHelper.deviceAllowsIsland(ctx)
+    } catch (_: Throwable) {
+        false
+    }
+
+    fun capable(ctx: Context): Boolean = liveCapable(ctx) || islandCapable(ctx)
+
+    /** 设置页 / 日志里给人看的一句话 */
+    fun modeText(ctx: Context): String = when {
+        liveCapable(ctx) && islandCapable(ctx) -> "流体云 + 超级岛"
+        liveCapable(ctx) -> "流体云实况位"
+        islandCapable(ctx) -> "超级岛"
+        else -> "普通通知"
+    }
+
+    /** @return 成功推上实况位的件数；0 = 没推成（调用方回退普通通知） */
+    fun push(ctx: Context, list: List<Pair<String, PddCodeStore.Cached>>): Int {
+        var ok = 0
+        if (liveCapable(ctx)) {
+            val entries = list.map { (k, c) ->
+                LiveUpdate.Entry(
+                    PickupGate.noOf(k, c).ifBlank { c.code }, c.code, c.station, ""
+                )
+            }
+            val n = try {
+                LiveUpdate.pulse(ctx, entries, remind = true)
+            } catch (t: Throwable) {
+                SafeRun.w(TAG, t)
+                0
+            }
+            if (n > 0) ok = n
+        }
+        if (islandCapable(ctx)) {
+            val entries = list.map { (k, c) ->
+                IslandHelper.Entry(
+                    PickupGate.noOf(k, c).ifBlank { c.code }, c.code, c.station, ""
+                )
+            }
+            try {
+                // IslandHelper.sync 每次都重发（publishOne 保温两连发），到点即重挂岛
+                IslandHelper.sync(ctx, entries)
+                ok = maxOf(ok, entries.size)
+            } catch (t: Throwable) {
+                SafeRun.w(TAG, t)
+            }
+        }
+        return ok
+    }
+}
+
+/** 汇总提醒通知：独立渠道、固定 id 覆盖式、点击直达取件码页；实况位可用时让位 */
 object RemindNotifier {
 
     const val CHANNEL = "idcode_pickup_remind"
@@ -230,6 +357,22 @@ object RemindNotifier {
             Log.i(TAG, "没有通知权限 ⇒ 跳过（不弹窗、不报错）")
             return 0
         }
+
+        // ★ v1.4.25：岛/流体云优先 —— 成功了就不发普通通知
+        if (RemindDelivery.capable(ctx)) {
+            val n = try {
+                RemindDelivery.push(ctx, list)
+            } catch (t: Throwable) {
+                SafeRun.w(TAG, t)
+                0
+            }
+            if (n > 0) {
+                Log.i(TAG, "已走 ${RemindDelivery.modeText(ctx)} 提醒 ${list.size} 件 ⇒ 不发普通通知")
+                return list.size
+            }
+            Log.w(TAG, "实况位没推成 ⇒ 回退普通通知（不丢提醒）")
+        }
+
         val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return 0
         ensureChannel(nm)
         val brief = list.take(3).joinToString("、") { it.second.code }
@@ -250,7 +393,7 @@ object RemindNotifier {
             .build()
         return try {
             nm.notify(NOTI_ID, n)
-            Log.i(TAG, "已提醒 ${list.size} 件待取")
+            Log.i(TAG, "已提醒 ${list.size} 件待取（普通通知）")
             list.size
         } catch (t: Throwable) {
             SafeRun.w(TAG, t)
@@ -283,18 +426,29 @@ object RemindNotifier {
 /** 每 15 分钟醒一次，按配置判断到点没有；不做网络请求，只读本地缓存 */
 class RemindWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params) {
     override fun doWork(): Result = try {
-        val c = applicationContext
-        val slot = PickupReminder.dueSlot(c)
-        if (slot != null) {
-            val n = RemindNotifier.notifyPending(c)
-            // 无论有没有真的发出（可能 0 件待取），都记住这个时刻已处理，避免反复空跑
-            PickupReminder.markFired(c, slot)
-            Log.i("RemindWorker", "命中 ${PickupReminder.fmt(slot)}，待取 $n 件")
-        }
+        PickupReminder.tick(applicationContext, "worker")
         Result.success()
     } catch (t: Throwable) {
         SafeRun.w("RemindWorker", t)
         Result.success()
+    }
+}
+
+/** 精确闹钟到点：只做一次 tick，再把下一个时刻排上（自续期） */
+class RemindAlarmReceiver : BroadcastReceiver() {
+    override fun onReceive(ctx: Context, intent: Intent) {
+        val c = ctx.applicationContext
+        Log.i("RemindAlarm", "准时闹钟到点：${intent.action}")
+        try {
+            PickupReminder.tick(c, "alarm")
+        } catch (t: Throwable) {
+            SafeRun.w("RemindAlarm", t)
+        }
+        try {
+            RemindScheduler.armNext(c)
+        } catch (t: Throwable) {
+            SafeRun.w("RemindAlarm", t)
+        }
     }
 }
 
@@ -303,25 +457,77 @@ object RemindScheduler {
 
     private const val TAG = "RemindScheduler"
     private const val WORK = "idcode_pickup_remind"
+    const val ACTION_REMIND = "com.agent.idcode.action.REMIND_TICK"
+    private const val REQ = 0x524D
+
+    private fun alarmPi(ctx: Context): PendingIntent = PendingIntent.getBroadcast(
+        ctx, REQ,
+        Intent(ctx, RemindAlarmReceiver::class.java).setAction(ACTION_REMIND),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+
+    private fun showPi(ctx: Context): PendingIntent = PendingIntent.getActivity(
+        ctx, REQ + 1,
+        Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
 
     fun apply(ctx: Context) {
         val wm = try {
             WorkManager.getInstance(ctx)
         } catch (t: Throwable) {
             Log.w(TAG, "WorkManager 不可用：${t.message}")
+            armNext(ctx)   // 精确闹钟不依赖 WorkManager
             return
         }
         val slots = PickupReminder.slots(ctx)
         if (!PickupReminder.enabled(ctx) || slots.isEmpty()) {
             wm.cancelUniqueWork(WORK)
+            cancelAlarm(ctx)
             Log.i(TAG, "提醒关闭或无有效时刻 ⇒ 撤销排程")
             return
         }
+        // ★ v1.4.25：KEEP 而非 UPDATE —— 改一个时刻不该把周期任务的下次运行重置到 +15 分钟
         val req = PeriodicWorkRequestBuilder<RemindWorker>(15, TimeUnit.MINUTES).build()
-        wm.enqueueUniquePeriodicWork(WORK, ExistingPeriodicWorkPolicy.UPDATE, req)
-        Log.i(TAG, "已排程：15 分钟检查一次，共 ${slots.size} 个提醒时刻")
+        wm.enqueueUniquePeriodicWork(WORK, ExistingPeriodicWorkPolicy.KEEP, req)
+        Log.i(TAG, "已排程：15 分钟兜底一次，共 ${slots.size} 个提醒时刻")
+        armNext(ctx)
     }
 
-    /** 设置页「立即试一条」/ debug 入口 */
+    /** 下一个提醒时刻排一个「用户闹钟」通道 —— ColorOS 上唯一实测不被推迟 72h 的准时通道 */
+    fun armNext(ctx: Context) {
+        val am = ctx.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
+        val at = PickupReminder.nextSlotAt(ctx)
+        if (at == null) {
+            cancelAlarm(ctx)
+            return
+        }
+        try {
+            am.setAlarmClock(AlarmManager.AlarmClockInfo(at, showPi(ctx)), alarmPi(ctx))
+            Log.i(TAG, "准时闹钟 → " + SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(at)))
+        } catch (t: Throwable) {
+            Log.w(TAG, "setAlarmClock 失败，退回普通精确闹钟：${t.message}")
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && am.canScheduleExactAlarms()) {
+                    am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, alarmPi(ctx))
+                } else {
+                    am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, alarmPi(ctx))
+                }
+            } catch (t2: Throwable) {
+                SafeRun.w(TAG, t2)
+            }
+        }
+    }
+
+    private fun cancelAlarm(ctx: Context) {
+        try {
+            (ctx.getSystemService(Context.ALARM_SERVICE) as? AlarmManager)?.cancel(alarmPi(ctx))
+        } catch (t: Throwable) {
+            SafeRun.w(TAG, t)
+        }
+        Log.i(TAG, "准时闹钟已撤销")
+    }
+
+    /** 设置页「立即试一条」/ debug 入口 —— 走的是与到点完全相同的渠道分流 */
     fun testNow(ctx: Context): Int = RemindNotifier.notifyPending(ctx)
 }

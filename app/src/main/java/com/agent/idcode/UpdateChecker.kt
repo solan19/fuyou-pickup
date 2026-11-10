@@ -63,7 +63,9 @@ sealed class CheckResult {
 object UpdatePrefs {
     private const val PREF = "idcode_prefs"
     private const val KEY_URL = "update_manifest_url"
-    const val DEFAULT_URL = "https://raw.githubusercontent.com/solan19/fuyou-pickup/main/update.json"
+    // ★ v1.4.25：仓库是私有的，raw.githubusercontent.com 匿名读不到（403）。
+    //   清单与 APK 改放在公开发布页；该站点要求带 sharecode 才能访问静态资源。
+    const val DEFAULT_URL = "https://fuyou-update.app.workbuddy.host/update.json?sharecode=2QYLZIN5LX"
 
     private fun sp(ctx: Context) = ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
 

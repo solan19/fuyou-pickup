@@ -4975,6 +4975,10 @@ class MainActivity : Activity() {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         if (prefs.getBoolean(KEY_REOPEN_SETTINGS, false)) {
             prefs.edit().remove(KEY_REOPEN_SETTINGS).apply()
+            // ★ v1.4.25：recreate 会原样带回旧 intent（可能含小组件的 open_pickup），
+            //   不清掉的话重建 350ms 后会被 openPickup 覆盖到取件码页
+            intent?.removeExtra(HomeWidgets.EXTRA_OPEN_PICKUP)
+            intent?.removeExtra(HomeWidgets.EXTRA_OPEN_TRANSIT)
             openSettings()
         }
 
@@ -12374,12 +12378,8 @@ class MainActivity : Activity() {
             addCard(nCard)
         }
 
-        // ★★ v1.4.24：定时取件提醒 —— 时间段 + 用户自定时刻（最多 6 次）
+        // ★★ v1.4.25：定时取件提醒 —— 本卡局部重绘，不再 recreate（不跳页、不丢滚动位置）
         run {
-            fun reloadSettings() {
-                prefs.edit().putBoolean(KEY_REOPEN_SETTINGS, true).apply()
-                recreate()
-            }
             fun pickTime(title: String, cur: Int, cb: (Int, Int) -> Unit) {
                 val dlg = android.app.TimePickerDialog(
                     this@MainActivity,
@@ -12390,117 +12390,124 @@ class MainActivity : Activity() {
                 dlg.show()
             }
             val rCard = linearCard().apply { orientation = LinearLayout.VERTICAL }
-            rCard.addView(sectionTitle("定时取件提醒"))
-            rCard.addView(hintLine("先选允许提醒的时间段，再逐个添加具体时刻；一天最多 6 次。段外不响，无待取件码不响。"))
-            val rStatus = TextView(this@MainActivity).apply {
-                text = PickupReminder.describe(this@MainActivity)
-                textSize = UiTok.T13
-                setTextColor(cTextSecondary)
-                setPadding((UiTok.S16 * dp).toInt(), (8 * dp).toInt(),
-                           (UiTok.S16 * dp).toInt(), (8 * dp).toInt())
-            }
-            rCard.addView(rStatus)
-            rCard.addView(switchRow("启用定时提醒", PickupReminder.enabled(this@MainActivity)) { on, _ ->
-                PickupReminder.setEnabled(this@MainActivity, on)
-                rStatus.text = PickupReminder.describe(this@MainActivity)
-                appToast(this@MainActivity, if (on) "定时提醒已启用" else "定时提醒已关闭")
-            })
-            val (ws, we) = PickupReminder.window(this@MainActivity)
-            rCard.addView(trackRow(
-                "时间段 · 开始",
-                TextView(this@MainActivity).apply {
-                    text = PickupReminder.fmt(ws)
+            fun render() {
+                rCard.removeAllViews()
+                rCard.addView(sectionTitle("定时取件提醒"))
+                rCard.addView(hintLine("先选允许提醒的时间段，再逐个添加具体时刻；一天最多 6 次。段外不响，无待取件码不响。"))
+                val rStatus = TextView(this@MainActivity).apply {
+                    text = PickupReminder.describe(this@MainActivity)
                     textSize = UiTok.T13
                     setTextColor(cTextSecondary)
+                    setPadding((UiTok.S16 * dp).toInt(), (8 * dp).toInt(),
+                               (UiTok.S16 * dp).toInt(), (8 * dp).toInt())
                 }
-            ) {
-                pickTime("允许提醒的开始时刻", ws) { h, m ->
-                    val (_, e0) = PickupReminder.window(this@MainActivity)
-                    PickupReminder.setWindow(this@MainActivity, h * 60 + m, e0)
-                    reloadSettings()
-                }
-            })
-            rCard.addView(trackRow(
-                "时间段 · 结束",
-                TextView(this@MainActivity).apply {
-                    text = PickupReminder.fmt(we)
-                    textSize = UiTok.T13
-                    setTextColor(cTextSecondary)
-                }
-            ) {
-                pickTime("允许提醒的结束时刻", we) { h, m ->
-                    val (s0, _) = PickupReminder.window(this@MainActivity)
-                    PickupReminder.setWindow(this@MainActivity, s0, h * 60 + m)
-                    reloadSettings()
-                }
-            })
-            val curTimes = PickupReminder.times(this@MainActivity)
-            for (t in curTimes) {
-                val minute = t
+                rCard.addView(rStatus)
+                rCard.addView(switchRow("启用定时提醒", PickupReminder.enabled(this@MainActivity)) { on, _ ->
+                    PickupReminder.setEnabled(this@MainActivity, on)
+                    rStatus.text = PickupReminder.describe(this@MainActivity)
+                    appToast(this@MainActivity, if (on) "定时提醒已启用" else "定时提醒已关闭")
+                })
+                val (ws, we) = PickupReminder.window(this@MainActivity)
                 rCard.addView(trackRow(
-                    "提醒时刻 ${PickupReminder.fmt(minute)}",
+                    "时间段 · 开始",
                     TextView(this@MainActivity).apply {
-                        text = "点此删除"
+                        text = PickupReminder.fmt(ws)
                         textSize = UiTok.T13
                         setTextColor(cTextSecondary)
                     }
                 ) {
-                    PickupReminder.removeTime(this@MainActivity, minute)
-                    reloadSettings()
+                    pickTime("允许提醒的开始时刻", ws) { h, m ->
+                        val (_, e0) = PickupReminder.window(this@MainActivity)
+                        PickupReminder.setWindow(this@MainActivity, h * 60 + m, e0)
+                        render()
+                    }
                 })
-            }
-            if (curTimes.size < PickupReminder.MAX_SLOTS) {
                 rCard.addView(trackRow(
-                    "添加提醒时刻",
+                    "时间段 · 结束",
                     TextView(this@MainActivity).apply {
-                        text = "${curTimes.size}/${PickupReminder.MAX_SLOTS} 次"
+                        text = PickupReminder.fmt(we)
                         textSize = UiTok.T13
                         setTextColor(cTextSecondary)
                     }
                 ) {
-                    pickTime("添加提醒时刻", 9 * 60) { h, m ->
-                        val ok = PickupReminder.addTime(this@MainActivity, h * 60 + m)
-                        if (!ok) appToast(this@MainActivity, "已满 6 次，或该时刻已存在")
-                        reloadSettings()
+                    pickTime("允许提醒的结束时刻", we) { h, m ->
+                        val (s0, _) = PickupReminder.window(this@MainActivity)
+                        PickupReminder.setWindow(this@MainActivity, s0, h * 60 + m)
+                        render()
                     }
                 })
-            }
-            rCard.addView(trackRow(
-                "按间隔一键铺点",
-                TextView(this@MainActivity).apply {
-                    text = "覆盖当前时刻列表"
-                    textSize = UiTok.T13
-                    setTextColor(cTextSecondary)
+                val curTimes = PickupReminder.times(this@MainActivity)
+                for (t in curTimes) {
+                    val minute = t
+                    rCard.addView(trackRow(
+                        "提醒时刻 ${PickupReminder.fmt(minute)}",
+                        TextView(this@MainActivity).apply {
+                            text = "点此删除"
+                            textSize = UiTok.T13
+                            setTextColor(cTextSecondary)
+                        }
+                    ) {
+                        PickupReminder.removeTime(this@MainActivity, minute)
+                        render()
+                    })
                 }
-            ) {
-                val input = android.widget.EditText(this@MainActivity).apply {
-                    inputType = android.text.InputType.TYPE_CLASS_NUMBER
-                    hint = "间隔分钟，例如 240"
+                if (curTimes.size < PickupReminder.MAX_SLOTS) {
+                    rCard.addView(trackRow(
+                        "添加提醒时刻",
+                        TextView(this@MainActivity).apply {
+                            text = "${curTimes.size}/${PickupReminder.MAX_SLOTS} 次"
+                            textSize = UiTok.T13
+                            setTextColor(cTextSecondary)
+                        }
+                    ) {
+                        pickTime("添加提醒时刻", 9 * 60) { h, m ->
+                            val ok = PickupReminder.addTime(this@MainActivity, h * 60 + m)
+                            if (!ok) appToast(this@MainActivity, "已满 6 次，或该时刻已存在")
+                            render()
+                        }
+                    })
                 }
-                android.app.AlertDialog.Builder(this@MainActivity)
-                    .setTitle("按间隔铺点")
-                    .setMessage("从时间段起点开始每 N 分钟一个点，最多 6 个；会覆盖现有时刻，铺完可逐个删改。")
-                    .setView(input)
-                    .setPositiveButton("生成") { _, _ ->
-                        val n = input.text.toString().toIntOrNull() ?: 0
-                        if (n > 0) PickupReminder.fillByInterval(this@MainActivity, n)
-                        reloadSettings()
+                rCard.addView(trackRow(
+                    "按间隔一键铺点",
+                    TextView(this@MainActivity).apply {
+                        text = "覆盖当前时刻列表"
+                        textSize = UiTok.T13
+                        setTextColor(cTextSecondary)
                     }
-                    .setNegativeButton("取消", null)
-                    .showAnimated()
-            })
-            rCard.addView(trackRow(
-                "立即试一条",
-                TextView(this@MainActivity).apply {
-                    text = "只发汇总提醒，不改配置"
-                    textSize = UiTok.T13
-                    setTextColor(cTextSecondary)
-                }
-            ) {
-                val n = RemindScheduler.testNow(this@MainActivity)
-                appToast(this@MainActivity,
-                    if (n > 0) "已试发（$n 件待取）" else "当前无待取件码，或没有通知权限")
-            })
+                ) {
+                    val input = android.widget.EditText(this@MainActivity).apply {
+                        inputType = android.text.InputType.TYPE_CLASS_NUMBER
+                        hint = "间隔分钟，例如 240"
+                    }
+                    android.app.AlertDialog.Builder(this@MainActivity)
+                        .setTitle("按间隔铺点")
+                        .setMessage("从时间段起点开始每 N 分钟一个点，最多 6 个；会覆盖现有时刻，铺完可逐个删改。")
+                        .setView(input)
+                        .setPositiveButton("生成") { _, _ ->
+                            val n = input.text.toString().toIntOrNull() ?: 0
+                            if (n > 0) PickupReminder.fillByInterval(this@MainActivity, n)
+                            render()
+                        }
+                        .setNegativeButton("取消", null)
+                        .showAnimated()
+                })
+                rCard.addView(trackRow(
+                    "立即试一条",
+                    TextView(this@MainActivity).apply {
+                        text = "按到点渠道试发，不改配置"
+                        textSize = UiTok.T13
+                        setTextColor(cTextSecondary)
+                    }
+                ) {
+                    val n = RemindScheduler.testNow(this@MainActivity)
+                    appToast(this@MainActivity,
+                        if (n > 0) "已试发（$n 件待取，走${RemindDelivery.modeText(this@MainActivity)}）"
+                        else "当前无待取件码，或没有通知权限")
+                })
+                rCard.addView(hintLine("当前到点渠道：" + RemindDelivery.modeText(this@MainActivity)
+                        + "。开着流体云/超级岛且设备支持时只推实况位，不发普通通知；推不动自动回退普通通知。"))
+            }
+            render()
             addCard(rCard)
         }
 
@@ -20093,6 +20100,12 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         webView?.onResume()
+        // ★ v1.4.25：回前台补一次到点提醒（后台被 ColorOS 掐掉也不漏，120 分钟容差内补发）
+        try {
+            PickupReminder.tick(this, "resume")
+        } catch (t: Throwable) {
+            SafeRun.w("RemindResume", t)
+        }
         // ★ vc264h：开关开着时，每次回前台都重新确保"最近任务卡片隐藏"
         //   —— 任务可能被系统重建（新任务不带上次的设置），兜底重设一次，开销可忽略
         if (getSharedPreferences(PREFS, MODE_PRIVATE)

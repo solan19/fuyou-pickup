@@ -118,6 +118,12 @@ class KeepAliveReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, intent: Intent) {
         val act = intent.action ?: "(null)"
         Log.i("KeepAlive", "被唤醒：$act")
+        // ★ v1.4.25：任意一次保活唤醒都顺带检查到点提醒（放在 60 秒节流之前）
+        try {
+            PickupReminder.tick(ctx, "keepalive")
+        } catch (t: Throwable) {
+            SafeRun.w("KeepAlive", t)
+        }
         // ★ 2026-10-15：setAlarmClock 排上后系统会发 NEXT_ALARM_CLOCK_CHANGED，
         //   本 receiver 又把它当唤醒点重新 arm ⇒ arm→广播→arm 链式循环（实测 5 连发）。
         //   除闹钟自身触发（ACTION_TICK，必须续期）外，其余唤醒一律 60 秒节流。

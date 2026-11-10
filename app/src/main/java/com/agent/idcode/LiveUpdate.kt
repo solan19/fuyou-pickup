@@ -196,6 +196,56 @@ fun setEnabled(ctx: Context, on: Boolean) {
     )
 
     /**
+     * ★★ v1.4.25：**到点提醒专用的「重推」**。
+     *
+     * [sync] 是全量同步，码集合没变时会被指纹挡住（6 小时不重发）——常驻流体云本来
+     * 就不该反复弹。但「定时提醒到点」是一次明确的事件，用户要看到它重新亮一下，
+     * 所以这里绕过指纹、先撤后发，并把标题换成「取件提醒 · …」。
+     *
+     * @return 成功重推的条数；0 = 没推成（调用方据此回退普通通知）
+     */
+    fun pulse(ctx: Context, entries: List<Entry>, remind: Boolean = true): Int {
+        if (!isEnabled(ctx)) return 0
+        ensureChannel(ctx)
+        val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return 0
+        val want = entries
+            .filter { it.no.isNotBlank() && it.code.isNotBlank() }
+            .distinctBy { it.code }
+            .filter { e ->
+                try {
+                    MuteStore.blocks(ctx, "", "", e.no, e.code, e.station) == null
+                } catch (_: Throwable) {
+                    true
+                }
+            }
+            .take(6)
+        if (want.isEmpty()) return 0
+        val id = idOf("all")
+        val now = System.currentTimeMillis()
+        return try {
+            nm.cancel(id)
+            nm.notify(id, buildCluster(ctx, want, remind))
+            val fpMap = loadFp(ctx).toMutableMap()
+            val tsMap = loadTs(ctx).toMutableMap()
+            val posted = postedIds(ctx).toMutableSet()
+            val disMap = loadDismissed(ctx).toMutableMap()
+            fpMap[id] = want.map { it.code }.sorted().joinToString("§")
+            tsMap[id] = now
+            posted.add(id)
+            disMap.remove(id)   // 用户划掉过也允许「到点提醒」重新亮一次
+            saveFp(ctx, fpMap)
+            saveTs(ctx, tsMap)
+            savePosted(ctx, posted)
+            saveDismissed(ctx, disMap)
+            Log.i(TAG, "到点重推流体云：${want.size} 条（提醒态=$remind）")
+            want.size
+        } catch (t: Throwable) {
+            SafeRun.w(TAG, t)
+            0
+        }
+    }
+
+    /**
      * 同步实况位：该显示的显示、该更新的更新、**消失的取消**。
      *
      * ★ 为什么要有「同步」而不是「单发」：取件码会因为「已取出」而消失
@@ -318,9 +368,14 @@ fun setEnabled(ctx: Context, on: Boolean) {
      *   多个 ⇒ 标题「待取快递 N 件」，正文逐行列「码 · 驿站 · 承运商」。
      *   状态栏芯片（shortCriticalText）只有约 8 个半角字符宽：单码给码本身，多码给「取件码N件」。
      */
-    private fun buildCluster(ctx: Context, list: List<Entry>): Notification {
+    private fun buildCluster(ctx: Context, list: List<Entry>, remind: Boolean = false): Notification {
         val one = list.size == 1
-        val title = if (one) "取件码 ${list[0].code}" else "待取快递 ${list.size} 件"
+        val title = when {
+            remind && one -> "取件提醒 · 取件码 ${list[0].code}"
+            remind -> "取件提醒 · 待取快递 ${list.size} 件"
+            one -> "取件码 ${list[0].code}"
+            else -> "待取快递 ${list.size} 件"
+        }
         val body = list.mapIndexed { i, e ->
             buildString {
                 if (!one) append(i + 1).append(". ")
@@ -329,7 +384,7 @@ fun setEnabled(ctx: Context, on: Boolean) {
                 if (e.company.isNotBlank()) append(" · ").append(e.company)
             }
         }.joinToString("\n")
-        val shortText = if (one) shortOf(list[0].code) else "取件码${list.size}件"
+        val shortText = if (remind) "取件提醒" else if (one) shortOf(list[0].code) else "取件码${list.size}件"
         val extras = Bundle().apply {
             putBoolean(EXTRA_PROMOTED, true)
             putCharSequence(EXTRA_SHORT_CRITICAL, shortText)
