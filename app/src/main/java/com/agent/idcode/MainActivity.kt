@@ -4955,6 +4955,22 @@ class MainActivity : Activity() {
             if (ExpressStore.pollIntervalMin(this) > 0) KeepAlive.arm(this)
             else KeepAlive.disarm(this)
         }
+        // ★ v1.4.24：模拟一条指定平台的通知（走 NotifyCodeSink 全部门禁）
+        //   adb shell am start -n com.agent.idcode/.MainActivity \
+        //     --es debug_notify_platform dy --es debug_notify_text "提货码 D8-2201，请到自提点取件"
+        if (intent?.hasExtra("debug_notify_text") == true) {
+            val t = intent.getStringExtra("debug_notify_text").orEmpty()
+            val pid = intent.getStringExtra("debug_notify_platform").orEmpty().ifBlank { "pdd" }
+            val c = NotifyRules.pickCode(t)
+            val r = NotifyCodeSink.persist(this, pid, t, c)
+            Log.i("DebugNotify", r.reason)
+        }
+        if (intent?.getBooleanExtra("debug_remind_now", false) == true) {
+            Log.i("DebugRemind", "试发提醒：" + RemindScheduler.testNow(this) + " 件")
+        }
+        if (intent?.getBooleanExtra("debug_update_check", false) == true) {
+            UpdateChecker.checkAsync(this) { r -> Log.i("DebugUpdate", r.toString()) }
+        }
         // 设置页改完配置会 recreate 重刷颜色；这个标记让重建后自动回到设置页
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         if (prefs.getBoolean(KEY_REOPEN_SETTINGS, false)) {
@@ -10812,6 +10828,14 @@ class MainActivity : Activity() {
         if (pickupLayer != null) fetchPickup()
     }
 
+
+    /** ★ v1.4.24：设置页改完配置后重建并自动回到设置页 */
+    private fun reloadAfterSettingsChange() {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .putBoolean(KEY_REOPEN_SETTINGS, true).apply()
+        recreate()
+    }
+
     /** 重建主页（四栏文案依赖登录态时会用到） */
     private fun rebuildHome() {
         try {
@@ -12325,6 +12349,161 @@ class MainActivity : Activity() {
             Log.i("Settings", "菜鸟备用身份码 = $on")
         })
 
+        // ★★ v1.4.24：通知抓取（仅白名单平台）
+        run {
+            val nCard = linearCard().apply { orientation = LinearLayout.VERTICAL }
+            nCard.addView(sectionTitle("通知抓取"))
+            nCard.addView(hintLine("只解析下面勾选的 App 通知；规则、误抓过滤与样例自检见 NotifyRules。"))
+            nCard.addView(switchRow(
+                "从通知抓取件码",
+                NotifyPrefs.enabled(this@MainActivity),
+                onMoreClick = {
+                    infoDialog(
+                        "通知抓取",
+                        "需要在系统「通知使用权」里勾选本应用。只提取取件码 / 驿站 / 单号，" +
+                                "不保存通知原文、不上传；写入前会过屏蔽名单与作废码闸。"
+                    )
+                }
+            ) { on, _ -> NotifyPrefs.setEnabled(this@MainActivity, on) })
+            for (p in NotifyRules.PLATFORMS) {
+                nCard.addView(switchRow(
+                    p.label,
+                    NotifyPrefs.platformEnabled(this@MainActivity, p.id)
+                ) { on, _ -> NotifyPrefs.setPlatformEnabled(this@MainActivity, p.id, on) })
+            }
+            addCard(nCard)
+        }
+
+        // ★★ v1.4.24：定时取件提醒 —— 时间段 + 用户自定时刻（最多 6 次）
+        run {
+            fun reloadSettings() {
+                prefs.edit().putBoolean(KEY_REOPEN_SETTINGS, true).apply()
+                recreate()
+            }
+            fun pickTime(title: String, cur: Int, cb: (Int, Int) -> Unit) {
+                val dlg = android.app.TimePickerDialog(
+                    this@MainActivity,
+                    { _, h, m -> cb(h, m) },
+                    cur / 60, cur % 60, true
+                )
+                dlg.setTitle(title)
+                dlg.show()
+            }
+            val rCard = linearCard().apply { orientation = LinearLayout.VERTICAL }
+            rCard.addView(sectionTitle("定时取件提醒"))
+            rCard.addView(hintLine("先选允许提醒的时间段，再逐个添加具体时刻；一天最多 6 次。段外不响，无待取件码不响。"))
+            val rStatus = TextView(this@MainActivity).apply {
+                text = PickupReminder.describe(this@MainActivity)
+                textSize = UiTok.T13
+                setTextColor(cTextSecondary)
+                setPadding((UiTok.S16 * dp).toInt(), (8 * dp).toInt(),
+                           (UiTok.S16 * dp).toInt(), (8 * dp).toInt())
+            }
+            rCard.addView(rStatus)
+            rCard.addView(switchRow("启用定时提醒", PickupReminder.enabled(this@MainActivity)) { on, _ ->
+                PickupReminder.setEnabled(this@MainActivity, on)
+                rStatus.text = PickupReminder.describe(this@MainActivity)
+                appToast(this@MainActivity, if (on) "定时提醒已启用" else "定时提醒已关闭")
+            })
+            val (ws, we) = PickupReminder.window(this@MainActivity)
+            rCard.addView(trackRow(
+                "时间段 · 开始",
+                TextView(this@MainActivity).apply {
+                    text = PickupReminder.fmt(ws)
+                    textSize = UiTok.T13
+                    setTextColor(cTextSecondary)
+                }
+            ) {
+                pickTime("允许提醒的开始时刻", ws) { h, m ->
+                    val (_, e0) = PickupReminder.window(this@MainActivity)
+                    PickupReminder.setWindow(this@MainActivity, h * 60 + m, e0)
+                    reloadSettings()
+                }
+            })
+            rCard.addView(trackRow(
+                "时间段 · 结束",
+                TextView(this@MainActivity).apply {
+                    text = PickupReminder.fmt(we)
+                    textSize = UiTok.T13
+                    setTextColor(cTextSecondary)
+                }
+            ) {
+                pickTime("允许提醒的结束时刻", we) { h, m ->
+                    val (s0, _) = PickupReminder.window(this@MainActivity)
+                    PickupReminder.setWindow(this@MainActivity, s0, h * 60 + m)
+                    reloadSettings()
+                }
+            })
+            val curTimes = PickupReminder.times(this@MainActivity)
+            for (t in curTimes) {
+                val minute = t
+                rCard.addView(trackRow(
+                    "提醒时刻 ${PickupReminder.fmt(minute)}",
+                    TextView(this@MainActivity).apply {
+                        text = "点此删除"
+                        textSize = UiTok.T13
+                        setTextColor(cTextSecondary)
+                    }
+                ) {
+                    PickupReminder.removeTime(this@MainActivity, minute)
+                    reloadSettings()
+                })
+            }
+            if (curTimes.size < PickupReminder.MAX_SLOTS) {
+                rCard.addView(trackRow(
+                    "添加提醒时刻",
+                    TextView(this@MainActivity).apply {
+                        text = "${curTimes.size}/${PickupReminder.MAX_SLOTS} 次"
+                        textSize = UiTok.T13
+                        setTextColor(cTextSecondary)
+                    }
+                ) {
+                    pickTime("添加提醒时刻", 9 * 60) { h, m ->
+                        val ok = PickupReminder.addTime(this@MainActivity, h * 60 + m)
+                        if (!ok) appToast(this@MainActivity, "已满 6 次，或该时刻已存在")
+                        reloadSettings()
+                    }
+                })
+            }
+            rCard.addView(trackRow(
+                "按间隔一键铺点",
+                TextView(this@MainActivity).apply {
+                    text = "覆盖当前时刻列表"
+                    textSize = UiTok.T13
+                    setTextColor(cTextSecondary)
+                }
+            ) {
+                val input = android.widget.EditText(this@MainActivity).apply {
+                    inputType = android.text.InputType.TYPE_CLASS_NUMBER
+                    hint = "间隔分钟，例如 240"
+                }
+                android.app.AlertDialog.Builder(this@MainActivity)
+                    .setTitle("按间隔铺点")
+                    .setMessage("从时间段起点开始每 N 分钟一个点，最多 6 个；会覆盖现有时刻，铺完可逐个删改。")
+                    .setView(input)
+                    .setPositiveButton("生成") { _, _ ->
+                        val n = input.text.toString().toIntOrNull() ?: 0
+                        if (n > 0) PickupReminder.fillByInterval(this@MainActivity, n)
+                        reloadSettings()
+                    }
+                    .setNegativeButton("取消", null)
+                    .showAnimated()
+            })
+            rCard.addView(trackRow(
+                "立即试一条",
+                TextView(this@MainActivity).apply {
+                    text = "只发汇总提醒，不改配置"
+                    textSize = UiTok.T13
+                    setTextColor(cTextSecondary)
+                }
+            ) {
+                val n = RemindScheduler.testNow(this@MainActivity)
+                appToast(this@MainActivity,
+                    if (n > 0) "已试发（$n 件待取）" else "当前无待取件码，或没有通知权限")
+            })
+            addCard(rCard)
+        }
+
         // ---- 后台快递跟踪：不开 App 也能发现物流变化并通知 ----
         card = linearCard().apply {
             // ★ v2 统一：卡级不再套 padding —— 标题/行各自带 16dp 左缩进，标题左缘永远对齐
@@ -12884,6 +13063,104 @@ class MainActivity : Activity() {
             }
             aboutCard.addView(infoRow(aboutAppName, aboutVersion))
             aboutCard.addView(infoRow("包名", packageName))
+            // ★★ v1.4.24：检查更新 —— 不弹窗、不主动通知、不自动下载、不自动安装
+            val updStatus = TextView(this).apply {
+                text = "当前 $aboutVersion · 尚未检查"
+                textSize = UiTok.T13
+                setTextColor(cTextSecondary)
+                setPadding((UiTok.S16 * dp).toInt(), (8 * dp).toInt(),
+                           (UiTok.S16 * dp).toInt(), (8 * dp).toInt())
+            }
+            aboutCard.addView(updStatus)
+            val updRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding((UiTok.S16 * dp).toInt(), (4 * dp).toInt(),
+                           (UiTok.S16 * dp).toInt(), (10 * dp).toInt())
+            }
+            val btnCheck = TextView(this).apply {
+                text = "检查更新"
+                textSize = UiTok.T14
+                typeface = tfMedium
+                setTextColor(cAccent)
+                background = sq(UiTok.R999, UiTok.accentSoft(isDark()))
+                setPadding((14 * dp).toInt(), (7 * dp).toInt(), (14 * dp).toInt(), (7 * dp).toInt())
+                isClickable = true
+            }
+            val btnDownload = TextView(this).apply {
+                text = "下载更新"
+                textSize = UiTok.T14
+                typeface = tfMedium
+                setTextColor(cAccent)
+                background = sq(UiTok.R999, UiTok.accentSoft(isDark()))
+                setPadding((14 * dp).toInt(), (7 * dp).toInt(), (14 * dp).toInt(), (7 * dp).toInt())
+                isClickable = true
+                visibility = View.GONE
+            }
+            var pendingUpdate: UpdateInfo? = null
+            btnCheck.setOnClickListener {
+                updStatus.setTextColor(cTextSecondary)
+                updStatus.text = "正在检查更新…"
+                btnDownload.visibility = View.GONE
+                UpdateChecker.checkAsync(this@MainActivity) { r ->
+                    when (r) {
+                        is CheckResult.UpToDate ->
+                            updStatus.text = "已是最新版本（versionCode ${r.current}）"
+                        is CheckResult.NotPublished -> updStatus.text = r.message
+                        is CheckResult.Failed -> updStatus.text = r.message
+                        is CheckResult.Available -> {
+                            val info = r.info
+                            pendingUpdate = info
+                            val sb = StringBuilder()
+                            if (info.force) sb.append("【必须更新】")
+                            sb.append("发现新版本 ").append(info.versionName)
+                                .append("（").append(info.versionCode).append("）")
+                            if (info.notes.isNotBlank()) sb.append("\n").append(info.notes)
+                            if (info.publishedAt.isNotBlank()) sb.append("\n发布于 ").append(info.publishedAt)
+                            updStatus.text = sb.toString()
+                            // ★ force 只做关于页醒目态，不弹窗、不主动推通知
+                            if (info.force) updStatus.setTextColor(Color.parseColor("#D93025"))
+                            btnDownload.visibility = View.VISIBLE
+                        }
+                    }
+                }
+            }
+            btnDownload.setOnClickListener {
+                val info = pendingUpdate ?: return@setOnClickListener
+                UpdateChecker.downloadAndInstall(this@MainActivity, info) { s -> updStatus.text = s }
+            }
+            updRow.addView(btnCheck)
+            updRow.addView(btnDownload, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { leftMargin = (8 * dp).toInt() })
+            aboutCard.addView(updRow)
+            aboutCard.addView(trackRow(
+                "更新清单地址",
+                TextView(this).apply {
+                    text = UpdatePrefs.url(this@MainActivity)
+                    textSize = UiTok.T115
+                    setTextColor(cTextTertiary)
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                }
+            ) {
+                val input = android.widget.EditText(this@MainActivity).apply {
+                    setText(UpdatePrefs.url(this@MainActivity))
+                    inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                            android.text.InputType.TYPE_TEXT_VARIATION_URI
+                }
+                android.app.AlertDialog.Builder(this@MainActivity)
+                    .setTitle("更新清单地址")
+                    .setMessage("私有仓库的 raw 地址没有令牌读不到；分发时请填已安装用户可访问的 https 地址。")
+                    .setView(input)
+                    .setPositiveButton("保存") { _, _ ->
+                        UpdatePrefs.setUrl(this@MainActivity, input.text.toString())
+                        appToast(this@MainActivity, "已保存，点「检查更新」生效")
+                        reloadAfterSettingsChange()
+                    }
+                    .setNegativeButton("取消", null)
+                    .showAnimated()
+            })
             addCard(aboutCard)
         }
         // ★ vc415：新增「其他」分类（设置页最底部），导出日志归入该分类
@@ -16994,6 +17271,35 @@ class MainActivity : Activity() {
         val got = IdNotifyListener.pickCode(sample)
         line(got == "8-3-2201", "通知抠码解析",
             if (got == "8-3-2201") "样例抠出 $got" else "样例只抠出「$got」（解析规则可能已失效）")
+        // ★ v1.4.24：通知规则回放（各平台样例逐条抠码）
+        try {
+            val rs = NotifyRules.replay()
+            val pass = rs.count { it.pass }
+            val bad = rs.filter { !it.pass }
+                .joinToString(" | ") { "${it.platform}:期望[${it.expect}]实得[${it.actual}]" }
+            line(pass == rs.size, "通知规则回放",
+                "$pass/${rs.size} 条样例通过" + (if (bad.isEmpty()) "" else "；失败：$bad"))
+        } catch (t: Throwable) {
+            line(false, "通知规则回放", "异常：${t.message}")
+        }
+        try {
+            line(NotifyPrefs.enabled(this), "通知抓取总开关",
+                (if (NotifyPrefs.enabled(this)) "已开启" else "已关闭") +
+                        " · 已勾选 ${NotifyPrefs.enabledPlatforms(this).size}/${NotifyRules.PLATFORMS.size} 个平台")
+        } catch (t: Throwable) {
+            line(false, "通知抓取", "读取失败：${t.message}")
+        }
+        try {
+            line(null, "定时提醒", PickupReminder.describe(this))
+        } catch (t: Throwable) {
+            line(false, "定时提醒", "读取失败：${t.message}")
+        }
+        try {
+            line(null, "检查更新",
+                "当前 versionCode=${UpdateChecker.currentCode(this)}；清单=${UpdatePrefs.url(this)}")
+        } catch (t: Throwable) {
+            line(false, "检查更新", "读取失败：${t.message}")
+        }
         return sb.toString().trim()
     }
 
