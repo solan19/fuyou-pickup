@@ -458,7 +458,9 @@ class MainActivity : Activity() {
     }
 
     /** 途中栏抓取：复用拼多多/京东两条通道，回调里对原始响应做宽口径解析（非终态订单） */
-    private fun fetchInTransit(force: Boolean = false) {
+    private fun fetchInTransit(force: Boolean = false, silent: Boolean = false) {
+        // ★★ v1.4.29：silent = 首页发起（没有在途层），抓全部已登录源、只喂数据不画 UI
+        transitSilent = silent
         // ★ vc392：同上，在途栏也按账号范围清
         enforceAccountScopes()
         transitTimeout?.let { mainHandler.removeCallbacks(it) }
@@ -507,20 +509,22 @@ class MainActivity : Activity() {
         //   拼多多原生接口 0.585s、淘宝网页旁听 2.9s，而京东那一路要 16.6s（这台机器每次都是
         //   0 张卡），于是进页后状态行一直挂着「正在获取京东物流」十几秒 —— 用户说的"加载慢"。
         //   分开之后：进哪个平台就抓哪个平台，互不拖累。
-        val tabSrc = if (transitSrc.isEmpty()) "pdd" else transitSrc
+        // ★★ v1.4.29：静默模式抓**全部已登录源** —— 首页的在途件数是全平台口径，
+        //   不能只抓当前标签那一个（否则首页永远只反映一个平台）。
+        val tabSrc = if (silent) "" else if (transitSrc.isEmpty()) "pdd" else transitSrc
         if (tabSrc.isNotEmpty()) transitRoundLoaded.add(tabSrc)
-        val wantPdd = PddChannel.isLoggedIn(this) && tabSrc == "pdd"
-        val wantJd = JdChannel.isLoggedIn(this) && tabSrc == "jd"
-        val wantMi = miEnabled() && MiChannel.isLoggedIn(this) && tabSrc == "mi"
+        val wantPdd = PddChannel.isLoggedIn(this) && (silent || tabSrc == "pdd")
+        val wantJd = JdChannel.isLoggedIn(this) && (silent || tabSrc == "jd")
+        val wantMi = miEnabled() && MiChannel.isLoggedIn(this) && (silent || tabSrc == "mi")
         // ★ vc270：淘宝在途源 —— 淘宝登录态（jar cookie）即可，走网页层旁听链路
-        val wantTb = TbChannel.isLoggedIn() && tabSrc == "tb"
+        val wantTb = TbChannel.isLoggedIn() && (silent || tabSrc == "tb")
         // ★ 修真 bug：原来 `(if (wantMi) 1 else 0)` 写了**两次**（末尾本该是 wantSf/wantEms 的位），
         //   期望数因此永远比实际回调数多 1 —— 而 renderInTransit 开头是
         //   `if (transitGot < transitExpect) return` ⇒ 小米开着的时候**一张卡都渲染不出来**，
         //   只能等 50 秒超时报"超时"。
         // ★ vc697：手动单号现在是**独立标签** —— 轮到它时占一个期待位（否则状态行会永远
         //   停在"正在获取手动添加的单号…"，不会结算成"更新于 HH:mm"）。
-        val hasManual = manualWaybills(this).isNotEmpty() && tabSrc == "manual"
+        val hasManual = manualWaybills(this).isNotEmpty() && (silent || tabSrc == "manual")
         transitExpect = (if (wantPdd) 1 else 0) + (if (wantJd) 1 else 0) +
             (if (wantMi) 1 else 0) + (if (wantTb) 1 else 0) +
             (if (hasManual) 1 else 0)
@@ -562,7 +566,8 @@ class MainActivity : Activity() {
         //   原生接口层失败才回退 WebView 老路。
         if (wantPdd) fetchPddTransitNative()
         if (wantJd) JdChannel.fetch(this) { _, err ->
-            if (transitLayer == null) return@fetch
+            // ★ v1.4.29：静默抓取放行（否则首页永远拿不到京东这一路）
+            if (transitLayer == null && !transitSilent) return@fetch
             // ★ vc274：闸门占用 ≠ 失败 —— 与第 4 栏同款，快速重开第 5 栏时撞上会闪
             //   "获取失败：正在抓取中"。改走 onTransitGate：不显错、不计数，20s 兜底。
             if (err == PICKUP_GATE_MSG) { onTransitGate("jd"); return@fetch }
@@ -698,12 +703,13 @@ class MainActivity : Activity() {
                 }
             }
             mainHandler.post {
-                if (transitLayer == null) return@post
+                // ★ v1.4.29：静默抓取放行（拼多多是主源，拦住等于首页永远是 0 件）
+                if (transitLayer == null && !transitSilent) return@post
                 when {
                     rep == null || (!rep.ok && !rep.needLogin) -> {
                         // 原生路走不通：回退 WebView 老路（行为与 vc211 完全一致）
                         PddChannel.fetch(this) { _, err ->
-                            if (transitLayer == null) return@fetch
+                            if (transitLayer == null && !transitSilent) return@fetch
                             // ★ vc274：闸门占用 ≠ 失败（与第 4 栏同款）——
                             //   不显错、不计数，20s 兜底按完成收尾。
                             if (err == PICKUP_GATE_MSG) { onTransitGate("pdd"); return@fetch }
@@ -1188,6 +1194,16 @@ class MainActivity : Activity() {
     private var transitPainted = false
     private var expandedTransitKey: String? = null
 
+    /**
+     * ★★ v1.4.29：**首页静默抓取**模式。
+     *
+     * 为什么要有：首页要显示在途件数，但 `adjudicateTransit()` 读的是内存字段，
+     * 而这些字段只有进「在途」页才会被填 —— 于是"不进页面就永远 0 件"。
+     * 现在首页自己也能发起一轮抓取，此时**没有 transitLayer**，
+     * 各源回调里那些 `if (transitLayer == null) return` 必须放行，否则结果全被丢弃。
+     */
+    private var transitSilent = false
+
     /** ★ vc708：取件码页上一次渲染的内容指纹 —— 一致就整列不重画（消闪第二道闸） */
     private var pickupRenderFp = ""
 
@@ -1638,6 +1654,9 @@ class MainActivity : Activity() {
      * （下拉刷新、顶栏刷新按钮本来就是 force=true，任何间隔都穿透。）
      */
     private val ORDER_LIST_MIN_INTERVAL_MS = TimeGates.ORDER_LIST_MIN_INTERVAL_MS
+
+    /** ★ v1.4.29：首页静默抓取的最小间隔 —— 回前台太频繁时别反复打接口 */
+    private val HOME_TRANSIT_WARM_MS = 60_000L
 
     /**
      * ★ vc342（P0-5）：**单源**硬超时。
@@ -2189,7 +2208,15 @@ class MainActivity : Activity() {
     }
 
     private fun renderInTransit(cache: ArrayList<JSONObject>? = null) {
-        val list = transitList ?: return
+        val list = transitList ?: run {
+            // ★★ v1.4.29：**首页静默抓取没有在途层** —— 数据已经进了各源字段，
+            //   这里负责落盘并让首页跟着变。原来直接 return，静默抓一轮等于白抓。
+            if (transitSilent) {
+                runCatching { saveTransitCache() }
+                notifyHomeDataChanged("在途静默抓取")
+            }
+            return
+        }
         val useCache = cache != null
         // ★ vc270d：增量渲染 —— **不再等全部源回来才画**。旧逻辑源没齐就 return，
         //   下拉刷新瞬间 removeAllViews 清屏 + 淘宝链路 20~35s 才回来 ⇒ 屏幕长时间空白，
@@ -5432,7 +5459,9 @@ class MainActivity : Activity() {
         //   改走唯一裁决出口，与在途页列表、平台标签三者同数。
         // ★ 防御：首页在 onCreate 里就跑裁决，绝不能因为一次统计异常拖垮启动
         val homeAdj = try {
-            adjudicateTransit()
+            // ★★ v1.4.29：内存里一个源都没有 ⇒ 先拿落盘缓存打底。
+            //   原来首页只读内存字段，而那字段只有进过在途页才有 ⇒ 冷启动永远显示 0 件。
+            adjudicateTransit(homeSeedIfEmpty())
         } catch (t: Throwable) {
             SafeRun.w("HomeTransit", t)
             null
@@ -7687,7 +7716,8 @@ class MainActivity : Activity() {
      */
     private fun fetchMiChannel() {
         MiShopChannel.fetch(this) { captures, err ->
-            if (pickupLayer == null && transitLayer == null) return@fetch
+            // ★ v1.4.29：静默抓取放行
+            if (pickupLayer == null && transitLayer == null && !transitSilent) return@fetch
             miCaptures = captures
             // ★ vc346：两栏**各自独立**处理 —— 旧写法是 `if (pickup) ... else if (transit)`，
             //   第 4 栏开着时第 5 栏永远拿不到新解析结果。
@@ -9391,7 +9421,14 @@ class MainActivity : Activity() {
         if (counted) transitGot++
         Log.i("TbTransit", "淘宝源完成：${got.size} 张卡${if (failed) "（中断，保留旧卡）" else ""}" +
                 if (counted) "" else "（本轮已结算过）")
-        if (transitLayer == null) return
+        if (transitLayer == null) {
+            // ★ v1.4.29：静默抓取没有层 —— 落盘 + 通知首页，别把这一路白扔
+            if (transitSilent) {
+                runCatching { saveTransitCache() }
+                notifyHomeDataChanged("在途静默抓取")
+            }
+            return
+        }
         renderInTransit()
         // ★ vc301：淘宝在途落地后要接两件事 ——
         //   ① 第 4 栏重渲染：到站件（待取件/派送中）现在会进取件码栏。
@@ -10943,6 +10980,66 @@ class MainActivity : Activity() {
     }
 
     /** ★ v1.4.28：数据变了 ⇒ 首页跟着变（不在最前就先记账） */
+    /**
+     * ★★ v1.4.29：首页的「种子数据」—— 内存里一个源都没有时，用落盘缓存顶上。
+     *
+     * 为什么必须这么做：`adjudicateTransit()` 读的是 `pddTransit/jdTransit/…` 这些**内存字段**，
+     * 而它们只在 `fetchInTransit()` 里被填充。冷启动 → 字段全空 → 首页在途 0 件；
+     * 用户点进在途页抓一轮再回来，才有数。这就是「必须点进去才刷新」的真正原因。
+     *
+     * 有内存数据时返回 null（不掺缓存，免得把旧数据混进新一轮结果）。
+     */
+    private fun homeSeedIfEmpty(): ArrayList<JSONObject>? {
+        val hasMem = pddTransit.isNotEmpty() || jdTransit.isNotEmpty() ||
+                miTransit.isNotEmpty() || tbTransit.isNotEmpty() || manualTransit.isNotEmpty()
+        if (hasMem) return null
+        val cached = try {
+            loadTransitCache()
+        } catch (t: Throwable) {
+            SafeRun.w("HomeTransit", t)
+            ArrayList()
+        }
+        if (cached.isEmpty()) return null
+        Log.i("HomeTransit", "首页无内存数据 ⇒ 用落盘缓存打底 ${cached.size} 张")
+        return cached
+    }
+
+    /**
+     * ★★ v1.4.29：**首页静默抓取** —— 回前台时自己跑一轮，不必再进在途页。
+     *
+     * 闸门：
+     *  · 有任何图层打开 / 已在抓取中 ⇒ 不插手（让在途页自己做）；
+     *  · 距上次抓取 < [HOME_TRANSIT_WARM_MS] ⇒ 跳过（省接口、省快递100 额度）；
+     *  · 一个已登录源都没有 ⇒ 跳过（抓也抓不到东西）。
+     */
+    private fun warmUpTransitForHome() {
+        if (isFinishing || isDestroyed) return
+        if (topLayer() != null) {
+            Log.i("HomeTransit", "首页静默抓取跳过：有图层在最前")
+            return
+        }
+        val last = getSharedPreferences(PREFS, MODE_PRIVATE).getLong(KEY_LAST_ORDER_LIST, 0L)
+        val gap = System.currentTimeMillis() - last
+        if (last != 0L && gap < HOME_TRANSIT_WARM_MS) {
+            Log.i("HomeTransit", "首页静默抓取跳过：${gap / 1000}s 前刚抓过")
+            return
+        }
+        val anySource = PddChannel.isLoggedIn(this) || JdChannel.isLoggedIn(this) ||
+                (miEnabled() && MiChannel.isLoggedIn(this)) || TbChannel.isLoggedIn() ||
+                manualWaybills(this).isNotEmpty()
+        if (!anySource) {
+            Log.i("HomeTransit", "首页静默抓取跳过：没有任何已登录源")
+            return
+        }
+        Log.i("HomeTransit", "首页静默抓取开始（全源）")
+        try {
+            fetchInTransit(force = true, silent = true)
+        } catch (t: Throwable) {
+            SafeRun.w("HomeTransit", t)
+            transitSilent = false
+        }
+    }
+
     private fun notifyHomeDataChanged(reason: String) {
         if (topLayer() == null) {
             mainHandler.post { runCatching { rebuildHome() } }
@@ -20301,6 +20398,9 @@ class MainActivity : Activity() {
         }
         // ★ v1.4.28：回到 App 也补一次首页（后台抓过数据但当时没机会画）
         applyPendingHomeRefresh()
+        // ★★ v1.4.29：首页自己抓一轮 —— 用户不必再点进「在途」页才能看到件数。
+        //   延迟 600ms：避开 onCreate 建页与首帧，抓取不跟启动动画抢 CPU。
+        mainHandler.postDelayed({ warmUpTransitForHome() }, 600L)
         // ★ vc264h：开关开着时，每次回前台都重新确保"最近任务卡片隐藏"
         //   —— 任务可能被系统重建（新任务不带上次的设置），兜底重设一次，开销可忽略
         if (getSharedPreferences(PREFS, MODE_PRIVATE)

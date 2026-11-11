@@ -305,6 +305,22 @@ check("大卡片误触防护",
       and "guardTap(badge) { action() }" in main)
 check("提醒无时刻时明确提示",
       "还没有任何提醒时刻" in main)
+# ---- v1.4.29：首页在途不能只靠"点进在途页"才出数 ----
+check("首页内存空 ⇒ 用落盘缓存打底",
+      "fun homeSeedIfEmpty(" in main and "adjudicateTransit(homeSeedIfEmpty())" in main)
+check("首页自己静默抓一轮",
+      "fun warmUpTransitForHome(" in main
+      and "fetchInTransit(force = true, silent = true)" in main)
+check("静默抓取抓全部已登录源",
+      "if (silent) \"\" else if (transitSrc.isEmpty())" in main
+      and "(silent || tabSrc == \"jd\")" in main)
+check("静默抓取不被「没有在途层」丢弃",
+      "if (transitLayer == null && !transitSilent) return@fetch" in main
+      and "transitSilent = silent" in main)
+check("无层渲染时落盘并通知首页",
+      "notifyHomeDataChanged(\"在途静默抓取\")" in main)
+check("回前台触发静默抓取",
+      "mainHandler.postDelayed({ warmUpTransitForHome() }, 600L)" in main)
 # ---- v1.4.27：更新链必须是多源（境内 raw 会被 reset，单源必挂）----
 check("清单多源回退",
       "FALLBACK_MANIFESTS" in checker and "fun manifestCandidates(" in checker

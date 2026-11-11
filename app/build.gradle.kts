@@ -327,8 +327,10 @@ android {
         //   raw.githubusercontent.com 境内被链路重置（Connection reset），单源必失败。
         // ★★ v1.4.28：五个 bug —— 首页在途不自动刷新 / 通知码被"一码多单"和"已取件"误杀 /
         //   通知渠道被关导致抓码后不提示 / 定时提醒开关开着却没有时刻 / 首页大卡片误触。
-        versionCode = 747
-        versionName = "1.4.28"
+        // ★★ v1.4.29：首页在途「必须点进在途页才显示」——
+        //   首页读落盘缓存打底 + 首页自己静默抓一轮（不再依赖在途页 UI）。
+        versionCode = 748
+        versionName = "1.4.29"
     }
 
     buildTypes {
