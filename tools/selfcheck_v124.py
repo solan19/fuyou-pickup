@@ -280,7 +280,31 @@ check("渠道回退必须说明原因",
 check("gitignore 放行分发目录 APK", "!update/*.apk" in gi)
 check("CI 不再出现明文签名密码",
       "fuyou123456" not in wf and "secrets.KEYSTORE_BASE64" in wf)
-check("清单 apkUrl 指向仓库 update/ 目录", "/update/" in u.get("apkUrl", ""))
+# ★ v1.4.28：apkUrl 允许两种写法 —— 仓库 update/ 目录，或镜像页上的同名包
+check("清单 apkUrl 可下载（仓库 update/ 或镜像文件名）",
+      "/update/" in u.get("apkUrl", "") or "fuyou-" in u.get("apkUrl", ""))
+# ---- v1.4.28：五个 bug 的静态检查 ----
+track = open(os.path.join(KT, "TrackNotifier.kt"), encoding="utf-8").read()
+sink = open(os.path.join(KT, "NotifyCodeSink.kt"), encoding="utf-8").read()
+store = open(os.path.join(KT, "PddCodeStore.kt"), encoding="utf-8").read()
+check("通知渠道被关 ⇒ 换备用渠道",
+      "CHANNEL_FALLBACK" in track and "fun channelId(" in track
+      and "IMPORTANCE_NONE" in track)
+check("通知抓码后走统一发布并允许发通知",
+      "PickupPublish.publish(ctx, notifyNew = true)" in sink)
+check("通知条目不再用取件码回查已取件",
+      'if (c.src == "ntf")' in store)
+check("通知码与接口码同现 ⇒ 不作废",
+      "ntfKeys" in store and "视为同一件" in store)
+check("提醒自愈排程",
+      "fun ensureArmed(" in remind and "RemindScheduler.ensureArmed(this)" in main)
+check("首页数据变化自动重画",
+      "fun notifyHomeDataChanged(" in main and "notifyHomeDataChanged(\"在途抓取完成\")" in main)
+check("大卡片误触防护",
+      "fun guardTap(" in main and "guardTap(this) { openInTransit() }" in main
+      and "guardTap(badge) { action() }" in main)
+check("提醒无时刻时明确提示",
+      "还没有任何提醒时刻" in main)
 # ---- v1.4.27：更新链必须是多源（境内 raw 会被 reset，单源必挂）----
 check("清单多源回退",
       "FALLBACK_MANIFESTS" in checker and "fun manifestCandidates(" in checker

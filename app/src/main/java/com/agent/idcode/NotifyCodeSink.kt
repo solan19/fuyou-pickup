@@ -94,10 +94,15 @@ object NotifyCodeSink {
             platform = platformId,
         ))
 
-        // ⑤ 即时发布：小组件 / 流体云 / 岛 + 一条通知（notifyNew=false 避免二次打扰）
-        TrackNotifier.notifyUpdate(ctx, "ntf:$code", label, "通知里的取件码 $code", station)
+        // ⑤ 即时发布：小组件 / 流体云 / 岛 + 一条通知
+        //
+        // ★★ v1.4.28：这里原来固定 `notifyNew = false`（假定自己已经发过了），
+        //   一旦 `TrackNotifier` 的渠道被系统关成 IMPORTANCE_NONE，就**彻底静默**：
+        //   码进了缓存，但既没有通知、流体云也只是悄悄改内容不提示
+        //   （同志 2026-11-11：「抓取到通知的取件码后，流体云和 app 均不会推送通知」）。
+        //   现在交给统一出口去发 —— 它自己按「上次见过的码集合」去重，不会重复打扰。
         try {
-            PickupPublish.publish(ctx, notifyNew = false)
+            PickupPublish.publish(ctx, notifyNew = true)
         } catch (t: Throwable) {
             SafeRun.w(TAG, t)
         }

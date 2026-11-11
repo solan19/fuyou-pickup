@@ -26,13 +26,36 @@ import android.os.Build
 object TrackNotifier {
 
     const val CHANNEL = "idcode_tracking"
+
+    /**
+     * ★★ v1.4.28：**备用渠道**。
+     *
+     * 事故（同志 2026-11-11：「通过通知抓取到了取件码，但 app 不推送」）：
+     * 真机 `dumpsys notification` 显示 `idcode_tracking` 的 `mImportance=0`
+     * （= IMPORTANCE_NONE，被用户/系统关成了"关闭"）—— 而 Android 的规则是
+     * **渠道一旦被用户改过，App 再也改不回来**（mUserLockedFields）。于是所有
+     * `notifyUpdate` 都发进了一个"不存在"的渠道，静默丢弃。
+     *
+     * 解法是标准做法：原渠道被关 ⇒ 换一个**新 id** 的渠道（新渠道按默认重要性创建），
+     * 用户仍可以单独关掉它，但不会因为历史误关而永久收不到任何通知。
+     */
+    private const val CHANNEL_FALLBACK = "idcode_tracking_v2"
     private const val CHANNEL_NAME = "快递跟踪"
+
+    /** 当前该用哪个渠道：原渠道被关 ⇒ 备用渠道 */
+    private fun channelId(ctx: Context): String {
+        val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            ?: return CHANNEL
+        val cur = nm.getNotificationChannel(CHANNEL) ?: return CHANNEL
+        return if (cur.importance == NotificationManager.IMPORTANCE_NONE) CHANNEL_FALLBACK else CHANNEL
+    }
 
     fun ensureChannel(ctx: Context) {
         val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
-        if (nm.getNotificationChannel(CHANNEL) != null) return
+        val id = channelId(ctx)
+        if (nm.getNotificationChannel(id) != null) return
         nm.createNotificationChannel(
-            NotificationChannel(CHANNEL, CHANNEL_NAME, NotificationManager.IMPORTANCE_DEFAULT).apply {
+            NotificationChannel(id, CHANNEL_NAME, NotificationManager.IMPORTANCE_DEFAULT).apply {
                 description = "被跟踪的快递有新物流动态时提醒"
             }
         )
@@ -62,7 +85,8 @@ object TrackNotifier {
         val full = if (addr.isEmpty()) main else "$main\n取件地址：$addr"
         // ★ vc345：收起时也把地址摆出来（到站件用户最想知道"去哪取"）；没地址才显示轨迹
         val collapsed = if (addr.isEmpty()) main else "取件地址：$addr"
-        val n = Notification.Builder(ctx, CHANNEL)
+        // ★ v1.4.28：渠道被关时自动用备用渠道（见 [channelId]）
+        val n = Notification.Builder(ctx, channelId(ctx))
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentTitle(title)
             .setContentText(collapsed)
@@ -88,7 +112,7 @@ object TrackNotifier {
         val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
         val full = source + " 的登录会话在服务端已失效（本地 Cookie 还在，但服务端不认）。\n" +
                 "点此打开蜉蝣，在设置里重新登录一次即可恢复。"
-        val n = Notification.Builder(ctx, CHANNEL)
+        val n = Notification.Builder(ctx, channelId(ctx))
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentTitle(source + " 登录已过期")
             .setContentText("点此打开蜉蝣重新登录")

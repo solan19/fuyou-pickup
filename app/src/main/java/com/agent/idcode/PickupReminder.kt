@@ -259,8 +259,16 @@ object PickupReminder {
      */
     @Synchronized
     fun tick(ctx: Context, reason: String): Int {
+        // ★ v1.4.28：**每次 tick 都留一行诊断**。原来什么也没命中就静默返回，
+        //   真机上只能看到"闹钟到点了但没响"，完全无法判断卡在哪一步。
+        val slotDbg = dueSlot(ctx)
+        Log.i(
+            TAG,
+            "[$reason] tick：enabled=${enabled(ctx)} 窗口=${fmt(window(ctx).first)}–" +
+                    fmt(window(ctx).second) + " slots=${slots(ctx)} due=$slotDbg"
+        )
         if (!enabled(ctx)) return 0
-        val slot = dueSlot(ctx) ?: return 0
+        val slot = slotDbg ?: return 0
         val n = try {
             RemindNotifier.notifyPending(ctx)
         } catch (t: Throwable) {
@@ -498,6 +506,9 @@ object RemindScheduler {
     const val ACTION_REMIND = "com.agent.idcode.action.REMIND_TICK"
     private const val REQ = 0x524D
 
+    /** ★ v1.4.28：进程内定时器（见 [armInProcess]），必须在主线程 */
+    private val uiHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
     private fun alarmPi(ctx: Context): PendingIntent = PendingIntent.getBroadcast(
         ctx, REQ,
         Intent(ctx, RemindAlarmReceiver::class.java).setAction(ACTION_REMIND),
@@ -530,6 +541,39 @@ object RemindScheduler {
         wm.enqueueUniquePeriodicWork(WORK, ExistingPeriodicWorkPolicy.KEEP, req)
         Log.i(TAG, "已排程：15 分钟兜底一次，共 ${slots.size} 个提醒时刻")
         armNext(ctx)
+        armInProcess(ctx)
+    }
+
+    /**
+     * ★★ v1.4.28：**进程内定时器** —— ColorOS 上唯一稳的通道。
+     *
+     * 真机实证（2026-11-11 14:23，PJZ110/ColorOS）：
+     *   `OplusAppStartupManager: prevent start com.agent.idcode, cmp …RemindAlarmReceiver
+     *    by broadcast system[alarmManger]` —— 系统的「应用启动管理」**直接拦掉了闹钟广播**，
+     *   闹钟到点了，接收器根本没跑起来。这就是「手动测试能发、到点不发」的根因。
+     *
+     * 只要进程还活着，主线程 Handler 到点就能精确触发，完全不经过广播，系统拦不着。
+     * 进程被清掉时这条通道自然失效 —— 那时靠闹钟（可能被拦）+ 回前台的 120 分钟补发兜底。
+     */
+    fun armInProcess(ctx: Context) {
+        try {
+            uiHandler.removeCallbacksAndMessages(null)
+            val at = PickupReminder.nextSlotAt(ctx) ?: return
+            val delay = (at - System.currentTimeMillis()).coerceAtLeast(0L)
+            val app = ctx.applicationContext
+            uiHandler.postDelayed({
+                Log.i(TAG, "进程内定时器到点（已等 ${delay}ms）")
+                try {
+                    PickupReminder.tick(app, "inproc")
+                } catch (t: Throwable) {
+                    SafeRun.w(TAG, t)
+                }
+                armInProcess(app)
+            }, delay + 300L)
+            Log.i(TAG, "进程内定时器已排：${delay}ms 后")
+        } catch (t: Throwable) {
+            SafeRun.w(TAG, t)
+        }
     }
 
     /** 下一个提醒时刻排一个「用户闹钟」通道 —— ColorOS 上唯一实测不被推迟 72h 的准时通道 */
@@ -576,4 +620,32 @@ object RemindScheduler {
 
     /** 设置页「立即试一条」/ debug 入口 —— 走的是与到点完全相同的渠道分流 */
     fun testNow(ctx: Context): Int = RemindNotifier.notifyPending(ctx)
+
+    /**
+     * ★★ v1.4.28：**自愈排程**。
+     *
+     * ColorOS 会撤掉不活跃 App 的闹钟（工程里到处都有这条实证）。原来只有
+     * 「改配置」才会重排一次，于是闹钟被系统吞掉之后，用户设的时刻就再也不会响
+     * —— 而「立即试一条」是直接发通知，看起来一切正常（同志报的 bug 4 就是这个形态）。
+     *
+     * 现在每次回前台都幂等地重排一次：已有就用同一个 PendingIntent 覆盖，没有就补上。
+     */
+    fun ensureArmed(ctx: Context) {
+        try {
+            if (!PickupReminder.enabled(ctx)) return
+            val slots = PickupReminder.slots(ctx)
+            if (slots.isEmpty()) {
+                Log.i(TAG, "提醒已开但没有任何时刻 ⇒ 不排程（设置页会提示先加时刻）")
+                return
+            }
+            armNext(ctx)
+            armInProcess(ctx)
+            Log.i(TAG, "自愈排程：${slots.size} 个时刻，下一个 " +
+                    (PickupReminder.nextSlotAt(ctx)?.let {
+                        SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(it))
+                    } ?: "（无）"))
+        } catch (t: Throwable) {
+            SafeRun.w(TAG, t)
+        }
+    }
 }

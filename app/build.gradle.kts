@@ -325,8 +325,10 @@ android {
         //   渠道回退说明原因、CI 改 Secrets、自检版本动态读取。
         // ★★ v1.4.27：更新检查改**多源自动回退**（清单 + 安装包）——
         //   raw.githubusercontent.com 境内被链路重置（Connection reset），单源必失败。
-        versionCode = 746
-        versionName = "1.4.27"
+        // ★★ v1.4.28：五个 bug —— 首页在途不自动刷新 / 通知码被"一码多单"和"已取件"误杀 /
+        //   通知渠道被关导致抓码后不提示 / 定时提醒开关开着却没有时刻 / 首页大卡片误触。
+        versionCode = 747
+        versionName = "1.4.28"
     }
 
     buildTypes {

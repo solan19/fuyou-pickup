@@ -453,6 +453,8 @@ class MainActivity : Activity() {
         transitTabRow = null
         transitTabsScroll = null
         transitRoundLoaded.clear()
+        // ★ v1.4.28：在途页关了 ⇒ 如果这期间数据变过，把首页补画一次
+        applyPendingHomeRefresh()
     }
 
     /** 途中栏抓取：复用拼多多/京东两条通道，回调里对原始响应做宽口径解析（非终态订单） */
@@ -2268,6 +2270,8 @@ class MainActivity : Activity() {
             Log.i("TransitCache", "真实渲染：all=" + all.size + " 距进页=" +
                 (System.currentTimeMillis() - transitEnterMs) + "ms")
             saveTransitCache()   // ★ vc270c：按源落盘（取件码口径）
+            // ★ v1.4.28：抓完立刻让首页跟着变，别再等用户手动刷新两页
+            notifyHomeDataChanged("在途抓取完成")
         }
         if (useCache) {
             // 卡是旧数据，得说清楚正在刷新，别让用户以为这就是最新的。
@@ -2607,6 +2611,19 @@ class MainActivity : Activity() {
     /** ★ v1.4.23：统计是否已由 [adjudicateTransit] 算过。
      *  真 0 件时 map 也是空的，不能用 isEmpty() 当「没算过」—— 否则每个标签都会重跑一次裁决。 */
     private var transitShownReady = false
+
+    /**
+     * ★★ v1.4.28：首页「需要重画」的记账位。
+     *
+     * 事故（同志 2026-11-11 bug 1）：**有在途快递，但必须先刷新一次取件码页和在途页，
+     * 首页才会显示**。根因是首页只在 onCreate / 手动操作时重画，而真正的抓取是
+     * 进「在途」「取件码」页才发生的 —— 抓完只更新了缓存与那一页，没人通知首页。
+     * 现在数据一变就记账：首页在最前就直接重画，被图层盖着就先记下，退回首页再画。
+     */
+    private var homeNeedsRefresh = false
+
+    /** 上一次导航跳转的时刻（误触去抖用，见 [guardTap]） */
+    private var lastNavAt = 0L
     /** 名单里每条「连续仍在运输中」的轮次（连续满 3 轮 ⇒ 自动移出，防误加永久卡死） */
     private val muteRunningRounds = HashMap<String, Int>()
     private var transitGot = 0
@@ -4968,6 +4985,34 @@ class MainActivity : Activity() {
         if (intent?.getBooleanExtra("debug_remind_now", false) == true) {
             Log.i("DebugRemind", "试发提醒：" + RemindScheduler.testNow(this) + " 件")
         }
+        // ★★ v1.4.28：验证「到点」链路用 —— 设一个 N 分钟后的时刻并启用、排程。
+        //   adb shell am start -n com.agent.idcode/.MainActivity --es debug_remind_in 2
+        intent?.getStringExtra("debug_remind_in")?.toIntOrNull()?.let { mins ->
+            val cal = java.util.Calendar.getInstance()
+                .apply { add(java.util.Calendar.MINUTE, mins) }
+            val slot = cal.get(java.util.Calendar.HOUR_OF_DAY) * 60 +
+                    cal.get(java.util.Calendar.MINUTE)
+            PickupReminder.setTimes(this, listOf(slot))
+            PickupReminder.setEnabled(this, true)
+            RemindScheduler.apply(this)
+            Log.i(
+                "DebugRemind",
+                "已设置提醒时刻 ${PickupReminder.fmt(slot)}（+${mins} 分钟）并启用；" +
+                        "下一个=" + PickupReminder.nextSlotAt(this)
+            )
+        }
+        // ★ v1.4.28：清掉一条指定取件码（联调/自检用，避免测试码留在用户机器上）
+        intent?.getStringExtra("debug_remove_code")?.let { code ->
+            var n = 0
+            for ((k, c) in PddCodeStore.all(this)) {
+                if (c.code == code) {
+                    PddCodeStore.remove(this, k)
+                    n++
+                }
+            }
+            runCatching { PickupPublish.publish(this, notifyNew = false) }
+            Log.i("DebugCodes", "已移除取件码 $code 的 $n 条缓存")
+        }
         if (intent?.getBooleanExtra("debug_update_check", false) == true) {
             UpdateChecker.checkAsync(this) { r -> Log.i("DebugUpdate", r.toString()) }
         }
@@ -5353,7 +5398,7 @@ class MainActivity : Activity() {
             setTextColor(Color.WHITE)
             background = ctasBg()
             isClickable = true
-            setOnClickListener { openPickup("all") }
+            guardTap(this) { openPickup("all") }
         }
         // ★ v2 .herofoot：主按钮 + 一个纯文字按钮（ghost），胶囊高 40dp
         val heroFoot = LinearLayout(this).apply {
@@ -5369,7 +5414,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             setTextColor(cTextSecondary)
             isClickable = true
-            setOnClickListener { openPickup("all") }
+            guardTap(this) { openPickup("all") }
         }, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, (UiTok.S40Dp * dp).toInt()
         ).apply { leftMargin = (UiTok.S16 * dp).toInt() })
@@ -5413,7 +5458,8 @@ class MainActivity : Activity() {
             minimumHeight = (64 * dp).toInt()
             if (!isDark()) elevation = 1.5f * dp
             isClickable = true
-            setOnClickListener { openInTransit() }
+            // ★ v1.4.28：大卡片防误触（见 guardTap）
+            guardTap(this) { openInTransit() }
         }
         transitCard.addView(TextView(this).apply {
             text = "途"
@@ -10841,6 +10887,80 @@ class MainActivity : Activity() {
     }
 
     /** 重建主页（四栏文案依赖登录态时会用到） */
+    /**
+     * ★★ v1.4.28：首页 / 身份码这类**大卡片**的点击守卫。
+     *
+     * 事故（同志 bug 5）：首页的取件码、在途、身份码卡片「很容易误触，刚点击就跳转」。
+     * 这些卡片整块可点、又躺在 ScrollView 里，手指落下瞬间的一碰（多为想把页面往上推）
+     * 就会被当成点击。这里加三道闸：
+     *   ① 位移超过 touchSlop ⇒ 算滑动，不算点击；
+     *   ② 按下-抬起短于 60ms ⇒ 算"划过"，不算点击；
+     *   ③ 700ms 内的第二次点击直接吞掉（防止连点连跳两层）。
+     */
+    private fun guardTap(v: android.view.View, action: () -> Unit) {
+        val slop = android.view.ViewConfiguration.get(this).scaledTouchSlop
+        var dx0 = 0f
+        var dy0 = 0f
+        var at0 = 0L
+        var moved = false
+        v.setOnClickListener {
+            val now = System.currentTimeMillis()
+            if (now - lastNavAt < 700L) {
+                Log.i("TapGuard", "连点被忽略（距上次 " + (now - lastNavAt) + "ms）")
+                return@setOnClickListener
+            }
+            lastNavAt = now
+            action()
+        }
+        v.setOnTouchListener { view, e ->
+            when (e.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    dx0 = e.rawX
+                    dy0 = e.rawY
+                    at0 = System.currentTimeMillis()
+                    moved = false
+                    false
+                }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    if (kotlin.math.abs(e.rawX - dx0) > slop ||
+                        kotlin.math.abs(e.rawY - dy0) > slop
+                    ) moved = true
+                    false
+                }
+                android.view.MotionEvent.ACTION_UP -> {
+                    val dt = System.currentTimeMillis() - at0
+                    if (!moved && dt in 60..1500) view.performClick()
+                    else Log.i("TapGuard", "未算点击：movement=" + moved + " dt=" + dt + "ms")
+                    true
+                }
+                android.view.MotionEvent.ACTION_CANCEL -> {
+                    moved = true
+                    false
+                }
+                else -> false
+            }
+        }
+    }
+
+    /** ★ v1.4.28：数据变了 ⇒ 首页跟着变（不在最前就先记账） */
+    private fun notifyHomeDataChanged(reason: String) {
+        if (topLayer() == null) {
+            mainHandler.post { runCatching { rebuildHome() } }
+            Log.i("HomeRefresh", "数据变化（$reason）⇒ 立即重画首页")
+        } else {
+            homeNeedsRefresh = true
+            Log.i("HomeRefresh", "数据变化（$reason）⇒ 记账，回首页再重画")
+        }
+    }
+
+    /** ★ v1.4.28：回到首页时补画（幂等） */
+    private fun applyPendingHomeRefresh() {
+        if (!homeNeedsRefresh) return
+        homeNeedsRefresh = false
+        mainHandler.post { runCatching { rebuildHome() } }
+        Log.i("HomeRefresh", "回首页 ⇒ 补画一次")
+    }
+
     private fun rebuildHome() {
         try {
             val idx = root.indexOfChild(homeView)
@@ -11445,7 +11565,8 @@ class MainActivity : Activity() {
             }
             false
         }
-        badge.setOnClickListener { action() }
+        // ★ v1.4.28：身份码三格同样防误触
+        guardTap(badge) { action() }
         return cell
     }
 
@@ -12405,10 +12526,27 @@ class MainActivity : Activity() {
                                (UiTok.S16 * dp).toInt(), (8 * dp).toInt())
                 }
                 rCard.addView(rStatus)
+                // ★★ v1.4.28：开关开着却一个时刻都没有 ⇒ 永远不会有提醒（bug 4 的形态）。
+                //   原来这里只显示「时刻 未设置」，太容易被忽略；现在给一条醒目提示。
+                if (PickupReminder.slots(this@MainActivity).isEmpty()) {
+                    rCard.addView(hintLine(
+                        "⚠️ 现在还没有任何提醒时刻 —— 只打开开关不会响，" +
+                                "请在下面「添加提醒时刻」至少加一个，或点「按间隔一键铺点」。"
+                    ))
+                }
                 rCard.addView(switchRow("启用定时提醒", PickupReminder.enabled(this@MainActivity)) { on, _ ->
                     PickupReminder.setEnabled(this@MainActivity, on)
                     rStatus.text = PickupReminder.describe(this@MainActivity)
-                    appToast(this@MainActivity, if (on) "定时提醒已启用" else "定时提醒已关闭")
+                    // ★ v1.4.28：只有开关、没有时刻 = 一定不会响，必须当场说清楚
+                    appToast(
+                        this@MainActivity,
+                        when {
+                            !on -> "定时提醒已关闭"
+                            PickupReminder.slots(this@MainActivity).isEmpty() -> "已启用，但还没添加时刻 —— 这样不会响，请先加一个"
+                            else -> "定时提醒已启用"
+                        }
+                    )
+                    if (on) render()
                 })
                 // ★ v1.4.26：闹钟通道开关（默认开）。与「后台保活」的兜底闹钟口径不同，
                 //   这里明说代价 —— 开 = 最准时但状态栏常驻闹钟图标；关 = 可能被系统推迟。
@@ -15909,6 +16047,8 @@ class MainActivity : Activity() {
         }
         // 顺手把取件码推给桌面小组件（数据源 = PickupGate，与流体云 / 通知共用同一道闸）
         publishWidgetCodes()
+        // ★ v1.4.28：取件码这一份数据也变了 ⇒ 首页的「N 件待取」同步更新
+        notifyHomeDataChanged("取件码同步")
         // 后台快递跟踪：把本次抓到的全量包裹写成基线快照（TrackWorker 靠它判断"有没有变化"）
         publishTrackSnapshot()
         // ★ 流体云：**必须按快照推，不能按当次 pending**。
@@ -20153,6 +20293,14 @@ class MainActivity : Activity() {
         } catch (t: Throwable) {
             SafeRun.w("RemindResume", t)
         }
+        // ★★ v1.4.28：闹钟被 ColorOS 吞掉后自愈 —— 只要配置还在，回前台就重新排一次
+        try {
+            RemindScheduler.ensureArmed(this)
+        } catch (t: Throwable) {
+            SafeRun.w("RemindResume", t)
+        }
+        // ★ v1.4.28：回到 App 也补一次首页（后台抓过数据但当时没机会画）
+        applyPendingHomeRefresh()
         // ★ vc264h：开关开着时，每次回前台都重新确保"最近任务卡片隐藏"
         //   —— 任务可能被系统重建（新任务不带上次的设置），兜底重设一次，开销可忽略
         if (getSharedPreferences(PREFS, MODE_PRIVATE)

@@ -165,7 +165,17 @@ object PddCodeStore {
                 //   114-4-9453 昨天属于已取走的件、今天分给了刚到站的润唇膏），
                 //   用码反查会让"上一件的取件动作"传染给下一件。
                 if (c.pickedAt == 0L) {
-                    val t = PickedStore.of(ctx, listOf(c.waybill, k.substringAfter(':')))
+                    // ★★ v1.4.28：通知来源的键是 `ntf:<取件码>`，尾巴就是码本身 —— 拿它去问
+                    //   [PickedStore] 等于「用码反查」，而格口码会被驿站回收复用（v1.4.11 已明令禁止
+                    //   用码判身份）。后果：刚抓到的通知码可能立刻被上一件的取件动作传染成
+                    //   「已取件」⇒ 页面上根本不显示（同志报的「抓到的码刷新后就没了」的一条路径）。
+                    //   通知条目只在有运单号时才按身份回查。
+                    val ids = if (c.src == "ntf") {
+                        listOfNotNull(c.waybill.takeIf { it.isNotBlank() })
+                    } else {
+                        listOf(c.waybill, k.substringAfter(':'))
+                    }
+                    val t = if (ids.isEmpty()) 0L else PickedStore.of(ctx, ids)
                     if (t > 0L) c = c.copy(pickedAt = t)
                 }
                 // ★★ v1.4.8：**历史脏站名自愈**。1.4.8 之前 [TrackFetcher] 会把
@@ -336,6 +346,24 @@ object PddCodeStore {
         var killed = 0
         for ((cd, keys) in byCode) {
             if (keys.size < 2) continue
+            // ★★ v1.4.28：**通知来源不算「一码多单」污染**。
+            //   同一件快递常常先被通知抓到（写 `ntf:<码>`），随后平台接口也报出同一个码
+            //   （写 `pdd:<单号>`）—— 这是**同一件**，不是"一个码挂了好几单"。
+            //   旧逻辑一律 markDead + 全删 ⇒ 用户看到的就是「刷新后码消失」，
+            //   而且这个码 7 天内还被禁止再写回来。
+            //   现在：有 ntf 条目时，保留平台条目（更可信），只在没有平台条目时保留 ntf，
+            //   并且**不作废**这个码。
+            val ntfKeys = keys.filter { (map[it]?.src ?: "") == "ntf" }
+            if (ntfKeys.isNotEmpty()) {
+                val keep = keys.firstOrNull { (map[it]?.src ?: "") != "ntf" } ?: ntfKeys.first()
+                val dropNtf = keys.filter { it != keep }
+                for (k in dropNtf) map.remove(k)
+                android.util.Log.i(
+                    "PddCodeMatch",
+                    "码 $cd 同时来自通知与接口 ⇒ 视为同一件，保留 $keep，合并 ${dropNtf.size} 条（不作废）"
+                )
+                continue
+            }
             markDead(ctx, cd)
             killed++
             val owner = keys.firstOrNull { (map[it]?.pickedAt ?: 0L) != 0L }
