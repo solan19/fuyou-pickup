@@ -1,12 +1,12 @@
 {
   "schema": 1,
   "published": true,
-  "versionCode": 746,
-  "versionName": "1.4.27",
-  "apkUrl": "https://fuyou-update.app.workbuddy.host/fuyou-1.4.27.apk?sharecode=2QYLZIN5LX",
-  "sha256": "ff1e8af65fe5bb2325ab8ef3b3a7ed4a22c2742a53b551331f1ff16caf5b85f2",
-  "notes": "1.4.27：修「检查更新显示 connection reset」—— 清单与安装包都改成多源自动回退（镜像页 / gcore.jsDelivr / ghproxy / GitHub raw），任何一条被网络重置也能更新。",
+  "versionCode": 752,
+  "versionName": "1.4.33",
+  "apkUrl": "https://fuyou-update.app.workbuddy.host/fuyou-1.4.33.apk?sharecode=2QYLZIN5LX",
+  "sha256": "c2e6e420a59932ed065551eddb0834da5d8bded3552ee41171c8fcfba0feef80",
+  "notes": "1.4.33：① 点「一键申请权限」不再把设置页拆了重建（原来会滚回顶部、像又被送回设置页），权限齐了只原地刷新三行状态；② 点「申请后台运行」改跳 ColorOS「应用启动管理」（实测可达），不再只落到应用详情。另含 1.4.32 的刷新零位移修复。",
   "force": false,
   "minSupport": 0,
-  "publishedAt": "2026-11-11T13:49:05+08:00"
+  "publishedAt": "2026-11-11T16:07:54+08:00"
 }

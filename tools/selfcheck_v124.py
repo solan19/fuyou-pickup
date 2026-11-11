@@ -360,6 +360,16 @@ check("深色色板改为暮色",
 check("刷新容器关掉子树 overscroll",
       "OVER_SCROLL_NEVER" in pull and "fun killOverScroll(" in pull
       and "override fun onViewAdded(" in pull)
+check("后台运行直达 ColorOS 应用启动管理（实测可达）",
+      "com.oplus.battery/com.oplus.startupapp.view.StartupAppListActivity" in main
+      and "mCallingUid=1000" in main)
+check("权限申请完原地刷新、不重建设置页",
+      "private fun refreshPermUiInPlace(" in main
+      and "if (!refreshPermUiInPlace()) refreshSettingsIfOpen()" in main
+      and "permRowsRefresh = {" in main)
+check("设置页重建后恢复滚动位置",
+      "val keepY = settingsScrollField?.scrollY ?: 0" in main
+      and "settingsScrollField?.scrollTo(0, keepY)" in main)
 check("状态行恒定占位（GONE 改 INVISIBLE，不再让出高度）",
       "tv.visibility = View.INVISIBLE" in main
       and "minimumHeight = (30 * dp).toInt()" in main

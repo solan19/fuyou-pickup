@@ -334,8 +334,9 @@ android {
         // ★★ v1.4.31：刷新条不再顶内容（PullRefreshLayout）+ 深色模式改暮色并加总开关。
         // ★★ v1.4.32：下拉刷新时"内容被顶下来"的真凶是系统 overscroll 拉伸（Android 12+），
         //   不是刷新控件 —— 已在 PullRefreshLayout 里关掉子树全部 overscroll。
-        versionCode = 751
-        versionName = "1.4.32"
+        // ★★ v1.4.33：点「一键申请权限」不再重建设置页（会滚回顶部），改原地刷新三行状态。
+        versionCode = 752
+        versionName = "1.4.33"
     }
 
     buildTypes {

@@ -7,7 +7,7 @@
 
 | 项目 | 说明 |
 | --- | --- |
-| 版本 | 1.4.32（内部 versionCode 751） |
+| 版本 | 1.4.33（内部 versionCode 752） |
 | 包名 | `com.agent.idcode` |
 | 系统要求 | Android 12（API 31）及以上 |
 | 语言 | Kotlin（JVM Target 17） |

@@ -146,6 +146,18 @@ class MainActivity : Activity() {
      *    漏一处的后果很具体：**返回回调的开关直接决定系统播不播「窗口缩回桌面图标」的动画**。
      */
     private var settingsLayerField: ViewGroup? = null
+
+    /** ★ v1.4.33：设置页的滚动容器（重建后要恢复位置，否则"点一下就被甩回顶部"） */
+    private var settingsScrollField: android.widget.ScrollView? = null
+
+    /**
+     * ★ v1.4.33：设置页「权限与保活」卡那三行状态文字的原地刷新回调。
+     *
+     * 没这个的时候，权限检查完只能 `refreshSettingsIfOpen()`（拆页重建）——
+     * 同志点的正是"权限都齐了还点一次"，结果整页重建、滚动归零，
+     * 看上去就像"点了又被送回设置页"。页面关掉时置 null。
+     */
+    private var permRowsRefresh: (() -> Unit)? = null
     private var settingsLayer: ViewGroup?
         get() = settingsLayerField
         set(value) {
@@ -5700,9 +5712,32 @@ class MainActivity : Activity() {
 
     private fun refreshSettingsIfOpen() {
         if (settingsLayer == null) return
+        // ★ v1.4.33：重建前记滚动位置，建好再恢复 —— 否则用户会被甩回顶部，
+        //   看起来就像"点了按钮又回了一次设置页"。
+        val keepY = settingsScrollField?.scrollY ?: 0
         settingsLayer?.let { root.removeView(it) }
         settingsLayer = null
         openSettings()
+        if (keepY > 0) {
+            settingsScrollField?.post { settingsScrollField?.scrollTo(0, keepY) }
+        }
+    }
+
+    /**
+     * ★ v1.4.33：**能原地刷新就不要重建整页**。
+     *
+     * @return true = 已经原地更新完（页面没动过）；false = 设置页没开或还没登记回调，
+     *         调用方自行决定要不要 [refreshSettingsIfOpen] 兜底重建。
+     */
+    private fun refreshPermUiInPlace(): Boolean {
+        val f = permRowsRefresh ?: return false
+        return try {
+            f()
+            true
+        } catch (t: Throwable) {
+            SafeRun.w("Perm", t)
+            false
+        }
     }
 
     /**
@@ -11879,6 +11914,7 @@ class MainActivity : Activity() {
         attachTopBar(layer, makeTopBar(getString(R.string.settings_title), titleSize = UiTok.T26))
 
         val scroll = ScrollView(this)
+        settingsScrollField = scroll
         // 页面级外层：只管外边距，卡片自己管背景和内边距
         val outer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -13358,8 +13394,11 @@ class MainActivity : Activity() {
                 }
             ) {
                 when (openAutoStartPage()) {
-                    "startup" -> appToast(this, "在「自启动」列表里找到本应用并允许", true)
-                    "details" -> appToast(this, "进「耗电管理」→ 选「允许后台活动」", true)
+                    "startup" -> appToast(
+                        this, "在「自启动」列表里找到「蜉蝣·取件通」并打开开关", true
+                    )
+                    // ★ v1.4.33：ColorOS 15 里那一项叫「完全允许后台行为」，不是「允许后台活动」
+                    "details" -> appToast(this, "进「耗电管理」→ 选「完全允许后台行为」", true)
                     else -> appToast(this, "打不开系统设置，请在系统设置里手动允许后台运行", true)
                 }
             }
@@ -13399,6 +13438,10 @@ class MainActivity : Activity() {
             permCard.addView(btnRequestCore, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ))
+            // ★ v1.4.33：把"只刷新这三行"的回调登记下来，权限检查完就能原地更新
+            permRowsRefresh = {
+                refreshPermRowTexts(tvNotifyStatus, tvBattStatus, permStatus)
+            }
             addCard(permCard)
         }
         // ★ vc695 新增：关于应用 —— 版本号运行时读 PackageInfo，不硬编码
@@ -13670,6 +13713,9 @@ class MainActivity : Activity() {
         // ★ 防重入：收拢动画期间连点返回会重复 removeView（直接崩）
         if (settingsClosing) return
         settingsClosing = true
+        // ★ v1.4.33：页面要收了，登记的回调与滚动引用一并清掉（它们指向即将 removeView 的视图）
+        permRowsRefresh = null
+        settingsScrollField = null
         // ★★ v1.4.9：**硬兜底**。原来只靠 `withEndAction` 收尾：动画被打断
         //   （视图重建 / 又开了一次动画 / 层被别处 addView 覆盖）时 endAction 永远不跑
         //   ⇒ settingsLayer 与 settingsClosing 双双卡住 ⇒ "退出来就再也进不去"。
@@ -17297,7 +17343,8 @@ class MainActivity : Activity() {
         if (requestCode != REQ_NOTIF) return
         val ok = TrackNotifier.canNotify(this)
         appToast(this, if (ok) "通知已开启" else "没拿到通知权限：请到系统设置里手动允许「通知」", true)
-        if (ok) refreshSettingsIfOpen()
+        // ★ v1.4.33：原地刷新优先，不要为了刷新一行字把整页拆了重建
+        if (ok && !refreshPermUiInPlace()) refreshSettingsIfOpen()
         // ★ vc698：自动申请的第二段 —— 通知对话框关掉之后，再弹电池优化白名单
         //   （两个系统对话框不能同时弹，只能串起来）
         if (autoPermFlow) {
@@ -18014,7 +18061,9 @@ class MainActivity : Activity() {
         Log.i("Perm", "一键申请：通知缺=$missNotif 电池缺=$missBatt 通知使用权缺=$missListener")
         if (!missNotif && !missBatt && !missListener) {
             appToast(this, "权限已齐全：通知、电池白名单、通知使用权均已开启", true)
-            refreshSettingsIfOpen()
+            // ★ v1.4.33：齐了只需把三行状态文字刷新一遍 —— 原来这里重建整页，
+            //   用户会看到"设置页闪一下、滚回顶部"，就是本次报的"回到设置页"。
+            if (!refreshPermUiInPlace()) refreshSettingsIfOpen()
             return
         }
         if (missNotif) {
@@ -18169,7 +18218,18 @@ class MainActivity : Activity() {
 
     /** 各家 ROM 的自启动管理页组分（按厂商顺序，末尾由 [openAutoStartPage] 兜应用详情页） */
     private val ROM_AUTOSTART_COMPS = listOf(
-        // ColorOS / 一加 / realme
+        // ★★ v1.4.33：**ColorOS / 一加 15 实测唯一能打开的那个**。
+        //   页面标题「自启动」，内容「允许 6 个应用自启动 / 禁止 123 个应用自启动」，
+        //   本应用在"禁止"分组里，点开即可允许。
+        //
+        //   ⚠️ 不要试图直连「耗电管理」`com.oplus.powermanager.fuelgaue.PowerControlActivity`：
+        //   真机 dumpsys 抓到它那次启动是
+        //     `Intent { cmp=…PowerControlActivity (has extras) mCallingUid=1000 }`
+        //   —— 系统身份（uid 1000）才能带参数进去。第三方 App 用任何 extra 打开都是空白页
+        //   （pkg / pkg_name / package_name / packageName / appPackage / client_pkg / data package:
+        //    等 12 种都试过，force-stop 后重建也一样）。所以只能走自启动列表。
+        "com.oplus.battery/com.oplus.startupapp.view.StartupAppListActivity",
+        // ColorOS / 一加 / realme（旧机型/旧版本的组件名，留着兜底）
         "com.oplus.battery/com.oplus.startupapp.view.StartupAppListActivity",
         "com.coloros.safecenter/com.coloros.safecenter.permission.startup.StartupAppListActivity",
         "com.coloros.safecenter/com.coloros.safecenter.startupapp.StartupAppListActivity",
