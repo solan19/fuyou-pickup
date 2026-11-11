@@ -1,12 +1,12 @@
 {
   "schema": 1,
   "published": true,
-  "versionCode": 744,
-  "versionName": "1.4.25",
-  "apkUrl": "https://raw.githubusercontent.com/solan19/fuyou-pickup/main/update/fuyou-1.4.25.apk",
-  "sha256": "00fcbbfc880362da557e6dccf35c623984c06d9fc304ffdef146b28897dba18a",
-  "notes": "1.4.25：修复定时提醒到点不发送、删除提醒时刻跳到取件码页；开着流体云/超级岛且设备支持时，到点只推实况位、不发普通通知。（分发通道：公开仓库 raw）",
+  "versionCode": 745,
+  "versionName": "1.4.26",
+  "apkUrl": "https://raw.githubusercontent.com/solan19/fuyou-pickup/main/update/fuyou-1.4.26.apk",
+  "sha256": "a28f0e917fb0c0726c53560384e71bc3ba7ba621e363713cab399128872dc20d",
+  "notes": "1.4.26：全仓审查整改 —— 更新清单地址归一（公开仓库 raw）、流体云/超级岛承运商与正文口径统一、屏蔽名单取件码弱匹配补缺（删掉的码不再被写回）、桌面小组件改走统一闸、定时提醒新增「到点用闹钟通道」开关、渠道回退说明原因、CI 签名材料改 Secrets。",
   "force": false,
   "minSupport": 0,
-  "publishedAt": "2026-11-11T10:33:39+08:00"
+  "publishedAt": "2026-11-11T13:30:55+08:00"
 }
