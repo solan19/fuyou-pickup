@@ -129,6 +129,39 @@ class PullRefreshLayout(context: Context) : FrameLayout(context) {
         setWillNotDraw(false)
     }
 
+    /**
+     * ★★ v1.4.32：**关掉子树里所有 View 的 overscroll**。
+     *
+     * 这是"卡片还是被顶下来"的真凶。v1.4.31 换成自绘控件后，本类确实一帧都没移动过子 View
+     * （真机实测：刷新中与刷新结束两张截图，卡片位置逐像素相同），但同志依然看到下拉时
+     * 内容整体下移、松手弹回 —— 那是 **Android 12+ 系统自带的下拉拉伸回弹**
+     * （`View.overScrollBy` → `RenderNode.setStretchEffect`），作用在里层 ScrollView 上。
+     *
+     * 它发生的时间窗恰好是"手指移动还没超过 touchSlop、本控件尚未接管"的那几帧，
+     * 也就是说：用户下拉的全程都能看到它，而我们想拦也拦不住 —— 只能让它别发生。
+     * 既然下拉刷新已由本控件负责，系统这层橡皮筋就是多余的。
+     */
+    private fun killOverScroll(v: View) {
+        // OVER_SCROLL_NEVER = 2；用常量而不是硬编码数字
+        if (v.overScrollMode != View.OVER_SCROLL_NEVER) {
+            v.overScrollMode = View.OVER_SCROLL_NEVER
+        }
+        if (v is android.view.ViewGroup) {
+            for (i in 0 until v.childCount) killOverScroll(v.getChildAt(i))
+        }
+    }
+
+    override fun onViewAdded(child: View?) {
+        super.onViewAdded(child)
+        child?.let { killOverScroll(it) }
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        // 有些内容是在 addView 之后才挂进来的（补码、骨架屏），attach 时再扫一遍兜底
+        for (i in 0 until childCount) killOverScroll(getChildAt(i))
+    }
+
     private fun atTop(): Boolean {
         canScrollUp?.let { return !it() }
         val child = getChildAt(0) ?: return true
@@ -146,9 +179,14 @@ class PullRefreshLayout(context: Context) : FrameLayout(context) {
                 // 刷新中又按下：不拦（让用户正常点击/滚动）
             }
             MotionEvent.ACTION_MOVE -> {
-                if (isRefreshing) return false
                 val dy = ev.y - downY
                 val dx = ev.x - downX
+                // ★ v1.4.32：刷新中如果还在顶部往下拉，**也要吞掉** ——
+                //   交给 ScrollView 只会触发系统的拉伸回弹，又变成"内容被顶"。
+                if (isRefreshing) {
+                    if (downAtTop && dy > slop && abs(dy) > abs(dx)) return true
+                    return false
+                }
                 if (!horizontal && abs(dx) > slop && abs(dx) > abs(dy)) {
                     horizontal = true      // 本轮是横滑（侧滑返回），彻底放弃
                 }

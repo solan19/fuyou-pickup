@@ -330,6 +330,10 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             setTextColor(cTextSecondary)
             setPadding((16 * dp).toInt(), (12 * dp).toInt(), (16 * dp).toInt(), 0)
+            // ★★ v1.4.32：**整行恒定占位**。这行原来 3 秒后 GONE，117px 的高度一没了，
+            //   下面的列表就整体上移 —— 同志看到的"刷新时卡片被顶下来、结束又回原位"
+            //   就是它在显隐，跟下拉手势无关。见 showUpdateThenHide 注释。
+            minimumHeight = (30 * dp).toInt()
         }
         layer.addView(status, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -3687,7 +3691,12 @@ class MainActivity : Activity() {
         tv.text = text
         val job = Runnable {
             tv.animate().alpha(0f).setDuration(UiTok.D240).withEndAction {
-                tv.visibility = View.GONE
+                // ★★ v1.4.32：**GONE 改 INVISIBLE**。
+                //   GONE 会让这行 117px 的高度从布局里消失，下面的列表整体上移 ——
+                //   真机实测位移正好 117px（下拉中 vs 刷新后两张截图做互相关得到）。
+                //   同志报的"刷新时卡片被顶下来、结束又回原位"，根因就在这里，
+                //   与下拉手势/刷新控件都无关。INVISIBLE 保留占位，文字照样淡出。
+                tv.visibility = View.INVISIBLE
                 tv.alpha = 1f
                 statusFadeJob = null
             }.start()
@@ -11448,6 +11457,9 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             setTextColor(cTextSecondary)
             setPadding((16 * dp).toInt(), (12 * dp).toInt(), (16 * dp).toInt(), 0)
+            // ★★ v1.4.32：同 v1.4.32 在途页 —— 恒定占位，避免刷新完「更新于」淡出时
+            //   整列卡片上移 117px（真机量到的就是这个数）。
+            minimumHeight = (30 * dp).toInt()
         }
         column.addView(status, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT

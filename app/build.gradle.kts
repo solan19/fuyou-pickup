@@ -332,8 +332,10 @@ android {
         // ★★ v1.4.30：首页取件码与取件码页同源（PickupGate）+ 作废码表 2 小时过期
         //   + 一码多单不再全删（保留最新一条）+ 快速轻点不再被吞。
         // ★★ v1.4.31：刷新条不再顶内容（PullRefreshLayout）+ 深色模式改暮色并加总开关。
-        versionCode = 750
-        versionName = "1.4.31"
+        // ★★ v1.4.32：下拉刷新时"内容被顶下来"的真凶是系统 overscroll 拉伸（Android 12+），
+        //   不是刷新控件 —— 已在 PullRefreshLayout 里关掉子树全部 overscroll。
+        versionCode = 751
+        versionName = "1.4.32"
     }
 
     buildTypes {

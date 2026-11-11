@@ -356,6 +356,14 @@ check("深色模式有手动开关且优先",
       and "深色模式（暮色）" in main)
 check("深色色板改为暮色",
       "0xFF1B1526" in tokens and "0xFFFF8A5B" in tokens)
+# ---- v1.4.32：刷新时内容被顶 = 系统 overscroll 拉伸，必须关掉 ----
+check("刷新容器关掉子树 overscroll",
+      "OVER_SCROLL_NEVER" in pull and "fun killOverScroll(" in pull
+      and "override fun onViewAdded(" in pull)
+check("状态行恒定占位（GONE 改 INVISIBLE，不再让出高度）",
+      "tv.visibility = View.INVISIBLE" in main
+      and "minimumHeight = (30 * dp).toInt()" in main
+      and "tv.visibility = View.GONE\n                tv.alpha = 1f" not in main)
 # ---- v1.4.27：更新链必须是多源（境内 raw 会被 reset，单源必挂）----
 check("清单多源回退",
       "FALLBACK_MANIFESTS" in checker and "fun manifestCandidates(" in checker
