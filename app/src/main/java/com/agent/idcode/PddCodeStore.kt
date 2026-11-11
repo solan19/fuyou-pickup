@@ -63,9 +63,19 @@ object PddCodeStore {
     private val DEAD_WORDS: List<String> =
         PickupVerdict.HARD_TERMINAL + PickupVerdict.SOFT_TERMINAL
 
-    fun looksTaken(c: Cached): Boolean {
-        val t = c.latest
-        if (t.isBlank()) return false
+    fun looksTaken(c: Cached): Boolean = looksTakenText(c.latest)
+
+    /**
+     * ★★ v1.4.31：同一套词表的**纯文本版**。
+     *
+     * 为什么需要：取件码页拿到的是 `JSONObject`（各种源的卡），不是 [Cached]；
+     * 而首页那边判的是 `Cached`。两边以前各写一套，结果就是
+     * 「73-3-5888（早已领取的沐浴露）在首页被挡住、在取件码页照常挂着」——
+     * 同志 2026-11-11 15:07 又看到它，两边数字对不上。
+     */
+    fun looksTakenText(text: String): Boolean {
+        val t = text.trim()
+        if (t.isEmpty()) return false
         if (t.contains("待确认") || t.contains("待收货") || t.contains("待取")) return false
         return DEAD_WORDS.any { t.contains(it) }
     }

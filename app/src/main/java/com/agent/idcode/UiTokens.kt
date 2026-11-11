@@ -109,12 +109,18 @@ object UiTok {
     /** 品牌方块透明度：亮色 26(≈10%) / 暗色 38(≈15%) */
     fun brandTileAlpha(dark: Boolean): Int = if (dark) 38 else 26
 
-    /** 分割线色：亮色 12% 黑 / 暗色 20% 白（凝光的两档，比旧版更明确） */
-    fun dividerColor(dark: Boolean): Int = if (dark) 0x29FFFFFF else 0x14000000
+    /** 分割线色：亮色 12% 黑 / 暗色 15% 暖橙白（暮色） */
+    fun dividerColor(dark: Boolean): Int = if (dark) 0x26FFD9C2 else 0x14000000
 
-    // ---------- 凝光色板（取自 ColorOS 17 复刻库 COUI 的 CouiPresets） ----------
-    /** 页面底色：昼 #F0F1F2 / 夜 **纯黑**（不是近黑 —— 凝光的黑是真空的，卡片才浮得起来） */
-    fun pageBg(dark: Boolean): Int = if (dark) 0xFF000000.toInt() else 0xFFF0F1F2.toInt()
+    // ---------- 凝光色板（昼）+ 暮色色板（夜，v1.4.31） ----------
+    /**
+     * 页面底色：昼 #F0F1F2 / 夜 **暮色深紫 #1B1526**。
+     *
+     * ★★ v1.4.31：原来夜里是**纯黑**（凝光原版口径）。同志要求「深色模式按暮色风格」，
+     * 于是夜色调成"黄昏之后的天空"：底色偏紫、强调色转暖橙、文字改暖白。
+     * 纯黑在屏幕上太"硬"，也没有暮色的层次 —— 卡片那层半透明叠上去才显出紫灰。
+     */
+    fun pageBg(dark: Boolean): Int = if (dark) 0xFF1B1526.toInt() else 0xFFF0F1F2.toInt()
 
     /**
      * 卡片底色（v2「半融入背景」）：昼不再是死白一块，而是**半透明白的垂直渐变** ——
@@ -122,24 +128,39 @@ object UiTok {
      * 夜仍是 10% 白半透（叠在纯黑上 = #1A1A1A，等于系统的半透明卡）。
      * 返回 [cardBgTop] / [cardBgBottom] 两个端点，交给 [SquircleDrawable] 铺渐变。
      */
-    fun cardBgTop(dark: Boolean): Int = if (dark) 0x1AFFFFFF else 0xEBFFFFFF.toInt()
-    fun cardBgBottom(dark: Boolean): Int = if (dark) 0x1AFFFFFF else 0xD6FFFFFF.toInt()
+    fun cardBgTop(dark: Boolean): Int = if (dark) 0x20FFFFFF else 0xEBFFFFFF.toInt()
+    fun cardBgBottom(dark: Boolean): Int = if (dark) 0x16FFFFFF else 0xD6FFFFFF.toInt()
     /** 兼容旧调用点（纯色场景） */
     fun cardBg(dark: Boolean): Int = cardBgTop(dark)
 
-    /** 面板层（顶栏 / 抽屉）：夜景比卡片再亮一档 #1E1E1E */
-    fun panelBg(dark: Boolean): Int = if (dark) 0xFF1E1E1E.toInt() else 0xFFFFFFFF.toInt()
+    /** 面板层（顶栏 / 抽屉）：暮色下比页面底亮一档的紫 #262032 */
+    fun panelBg(dark: Boolean): Int = if (dark) 0xFF262032.toInt() else 0xFFFFFFFF.toInt()
 
-    /** 卡片描边：昼 6% 黑 / 夜 10% 白 —— 只用来勾边，不要加深 */
-    fun cardStroke(dark: Boolean): Int = if (dark) 0x1AFFFFFF else 0x0F000000
+    /** 弹窗 / 气泡浮层底：暮色下再亮一档（比面板白一点，浮得起来） */
+    fun overlayBg(dark: Boolean): Int = if (dark) 0xFF2C2539.toInt() else 0xFFFFFFFF.toInt()
 
-    /** 主按钮的凝光蓝：上浅下深，光从上面来 */
-    fun accentTop(dark: Boolean): Int = if (dark) 0xFF3D9DFF.toInt() else 0xFF2E9BFF.toInt()
-    fun accentBottom(dark: Boolean): Int = if (dark) 0xFF1478E0.toInt() else 0xFF0080FF.toInt()
+    /** 暮色文字的暖白基准（深色下统一用它派生透明度，不再用纯白） */
+    fun textPrimary(dark: Boolean): Int = if (dark) 0xE6F7F0E8.toInt() else 0xE6000000.toInt()
+    fun textSecondary(dark: Boolean): Int = if (dark) 0x8AF7F0E8.toInt() else 0x8A000000.toInt()
+    fun textTertiary(dark: Boolean): Int = if (dark) 0x70F7F0E8 else 0x70000000
+    fun textFaint(dark: Boolean): Int = if (dark) 0x45F7F0E8 else 0x45000000
+
+    /** 强调色：昼凝光蓝 #0080FF / 夜**暮橙** #FF8A5B */
+    fun accent(dark: Boolean): Int = if (dark) 0xFFFF8A5B.toInt() else 0xFF0080FF.toInt()
+
+    /** 链接色：昼深一档蓝 / 夜浅暖橙 */
+    fun link(dark: Boolean): Int = if (dark) 0xFFFFB08A.toInt() else 0xFF0070E0.toInt()
+
+    /** 卡片描边：昼 6% 黑 / 夜 15% 暖橙白 —— 暮色下边缘要带一点余晖色 */
+    fun cardStroke(dark: Boolean): Int = if (dark) 0x26FFD9C2 else 0x0F000000
+
+    /** 主按钮：昼凝光蓝 / 夜**暮橙**，上浅下深，光从上面来 */
+    fun accentTop(dark: Boolean): Int = if (dark) 0xFFFFA97C.toInt() else 0xFF2E9BFF.toInt()
+    fun accentBottom(dark: Boolean): Int = if (dark) 0xFFF2703C.toInt() else 0xFF0080FF.toInt()
 
     /** 强调色的 10~15% 淡底（chip / 选中态） */
     /** 强调色淡底（v2 天青：rgba(120,180,255,.20) —— 比旧版 .10 蓝更奶，亮度接近） */
-    fun accentSoft(dark: Boolean): Int = if (dark) 0x331A8CFF else 0x3378B4FF
+    fun accentSoft(dark: Boolean): Int = if (dark) 0x33FF8A5B else 0x3378B4FF
 
     // ---------- 凝光效果（管线：背景采样 → 模糊 → 材质混色 → 轮廓光） ----------
     /** 背景采样降采样分母（1/8）——采样图小、GPU 模糊便宜；一加 13 与低端机同参 */
@@ -204,9 +225,9 @@ object UiTok {
     /** 分段控件选中项（浅色=白 + 投影；深色=22% 白） */
     fun segSelBg(dark: Boolean): Int = if (dark) 0x38FFFFFF else 0xFFFFFFFF.toInt()
 
-    /** 开关轨道渐变（v2 .sw-t：#8FC0FA → #0080FF；夜间实色） */
-    fun switchTrackTop(dark: Boolean): Int = if (dark) 0xFF1A8CFF.toInt() else 0xFF8FC0FA.toInt()
-    fun switchTrackBottom(dark: Boolean): Int = if (dark) 0xFF1A8CFF.toInt() else 0xFF0080FF.toInt()
+    /** 开关轨道渐变：昼 #8FC0FA → #0080FF / 夜**暮橙** #FFA97C → #F2703C */
+    fun switchTrackTop(dark: Boolean): Int = if (dark) 0xFFFFA97C.toInt() else 0xFF8FC0FA.toInt()
+    fun switchTrackBottom(dark: Boolean): Int = if (dark) 0xFFF2703C.toInt() else 0xFF0080FF.toInt()
 
     /** 开关关闭轨道 */
     fun switchOff(dark: Boolean): Int = if (dark) 0x33FFFFFF else 0x1F000000

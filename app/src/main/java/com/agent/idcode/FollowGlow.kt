@@ -43,8 +43,9 @@ class FollowGlowDrawable(
     private val glowRadiusPx = 150f * dp
 
     /** 光色：日间偏冷白，夜间偏主蓝（纯黑上一团白光太硬） */
-    private val coreColor: Int = if (dark) 0x4D5C9DFF else 0x38FFFFFF
-    private val midColor: Int = if (dark) 0x1A5C9DFF else 0x14FFFFFF
+    // ★ v1.4.31：深色改暮色后，跟手光从淡蓝改成**落日橙**，否则一摸就是一片冷光
+    private val coreColor: Int = if (dark) 0x4DFFA97C else 0x38FFFFFF
+    private val midColor: Int = if (dark) 0x1AFF8A5B else 0x14FFFFFF
 
     fun moveTo(x: Float, y: Float) {
         cx = x

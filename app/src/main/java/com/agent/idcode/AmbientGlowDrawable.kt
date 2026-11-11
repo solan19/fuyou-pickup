@@ -26,11 +26,13 @@ class AmbientGlowDrawable(private val dark: Boolean) : Drawable() {
     private val basePaint = Paint()
 
     // (cxRatio, cyRatio, rxRatio, ryRatio, color) —— 照 v2 .frame::before 的位置与尺寸
+    // ★★ v1.4.31：深色（夜）改成**暮色**四角光 —— 右上落日橙 / 左上暮紫 / 下方余晖玫 / 右中暖黄。
+    //   暮色底 #1B1526 偏紫，只靠卡片提不动层次，得让这层暖光从背后透上来。
     private val glows: Array<FloatArray> = if (dark) arrayOf(
-        floatArrayOf(0.78f, -0.04f, 0.70f, 0.40f, 0x57FF9EC4.toFloat()),
-        floatArrayOf(0.06f, 0.16f, 0.52f, 0.34f, 0x4DBAA6FF.toFloat()),
-        floatArrayOf(0.50f, 1.04f, 0.70f, 0.34f, 0x2992E6C6.toFloat()),
-        floatArrayOf(1.00f, 0.58f, 0.44f, 0.24f, 0x1FFFDC92.toFloat()),
+        floatArrayOf(0.80f, -0.06f, 0.72f, 0.42f, 0x60FF7A45.toFloat()),
+        floatArrayOf(0.02f, 0.14f, 0.56f, 0.36f, 0x55B27AFF.toFloat()),
+        floatArrayOf(0.46f, 1.06f, 0.72f, 0.36f, 0x3DFF9EC4.toFloat()),
+        floatArrayOf(1.00f, 0.56f, 0.44f, 0.26f, 0x2EFFD08A.toFloat()),
     ) else arrayOf(
         floatArrayOf(0.82f, -0.02f, 0.58f, 0.34f, 0x45FFA8C7.toFloat()),
         floatArrayOf(0.04f, 0.04f, 0.46f, 0.28f, 0x3DBAA6FF.toFloat()),

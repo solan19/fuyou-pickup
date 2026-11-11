@@ -134,7 +134,7 @@ class MainActivity : Activity() {
     private val pickupDockAnims = ArrayList<android.animation.Animator>()
 
     /** ★ vc264m：第 4 栏的下拉刷新控件（null = 页面没开/已关） */
-    private var pickupSwipe: androidx.swiperefreshlayout.widget.SwipeRefreshLayout? = null
+    private var pickupSwipe: PullRefreshLayout? = null
     private var pickupStatusText: TextView? = null
     private var pickupTimeout: Runnable? = null
     /**
@@ -373,14 +373,15 @@ class MainActivity : Activity() {
         scroll.addView(list)
         // ★ vc264m：下拉松手刷新（SwipeRefreshLayout 包住 ScrollView）。
         //   触发调 fetchInTransit(force=true)——与顶栏刷新按钮同一入口（用户明确意图，穿透 90 秒闸）
-        val swipe = androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this).apply {
-            setColorSchemeColors(cAccent)   // 转圈弧色 = 项目主色（靛紫）
-            setProgressBackgroundColorSchemeColor(if (isDark()) Color.parseColor("#1C1D1F") else Color.WHITE)
-            setDistanceToTriggerSync((88 * dp).toInt())    // 拉多少距离触发（手感）
-            setSlingshotDistance((140 * dp).toInt())       // 阻尼拉伸距离（拖拽更跟手）
-            setOnRefreshListener {
+        // ★★ v1.4.31：**换成 [PullRefreshLayout]** —— 下拉时卡片一动不动，只在顶部浮一条进度线。
+        //   原来的 SwipeRefreshLayout 必然把整块内容跟着手指推下去再弹回（同志 14:56 反馈的"顶"），
+        //   那是它的固有机制，参数调不动。现在拉动只驱动这条线，内容零位移。
+        val swipe = PullRefreshLayout(this).apply {
+            barColor = cAccent
+            canScrollUp = { scroll.canScrollVertically(-1) }
+            onRefresh = {
                 fetchInTransit(force = true)
-                // 兜底：60 秒还没停就强制收起（防异常路径卡转圈）
+                // 兜底：60 秒还没停就强制收起（防异常路径卡进度）
                 postDelayed({ if (isRefreshing) isRefreshing = false }, 60_000L)
             }
             addView(scroll)
@@ -2622,7 +2623,7 @@ class MainActivity : Activity() {
     private var transitList: LinearLayout? = null
 
     /** ★ vc264m：第 5 栏的下拉刷新控件（null = 页面没开/已关） */
-    private var transitSwipe: androidx.swiperefreshlayout.widget.SwipeRefreshLayout? = null
+    private var transitSwipe: PullRefreshLayout? = null
     private var transitStatus: TextView? = null
     /** ★ vc697：平台标签条（在途快递按平台分开加载、左右滑动切换） */
     private var transitTabRow: LinearLayout? = null
@@ -2927,6 +2928,12 @@ class MainActivity : Activity() {
     /** 用户在取件码页长按删除过的单（键 = src:单号）—— 不再自动补回 */
     private const val KEY_PICKUP_MUTED = "pickup_muted"
         private const val KEY_THEME_MODE = "theme_mode"
+
+        /**
+         * ★ v1.4.31：设置页的「深色模式」开关。true = 强制暮色（不看系统、不看时段）。
+         * 关掉之后回到 [KEY_THEME_MODE] 的系统跟随 / 定时时段逻辑。
+         */
+        private const val KEY_FORCE_DARK = "force_dark"
     /** 侧滑跟手动画开关（预测性返回时让设置页跟着手指走），默认开 */
     private const val KEY_PREDICTIVE = "predictive_back"
         private const val KEY_DARK_START = "dark_start"
@@ -2966,6 +2973,9 @@ class MainActivity : Activity() {
 
     private fun isDark(): Boolean {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        // ★★ v1.4.31：设置页的「深色模式」开关**优先** —— 打开就一直走暮色，
+        //   不再看系统设置、也不看下面的定时时段（开关关掉才回到原来的逻辑）。
+        if (prefs.getBoolean(KEY_FORCE_DARK, false)) return true
         if (prefs.getString(KEY_THEME_MODE, "system") != "scheduled") {
             return (resources.configuration.uiMode and 0x30) == 0x20
         }
@@ -3020,7 +3030,7 @@ class MainActivity : Activity() {
     }
 
     /** 凝光蓝的十六进制写法（[chip] / [pill] 这类只收 String 的老接口用） */
-    private val ACCENT_HEX: String get() = if (isDark()) "#1A8CFF" else "#0080FF"
+    private val ACCENT_HEX: String get() = if (isDark()) "#FF8A5B" else "#0080FF"
 
     // ---------- 主题：ColorOS 17「凝光」色板（v1.4.19） ----------
     // 规格取自 ColorOS 17 的 Compose 复刻库 COUI（CouiPresets.Light / Dark），就是这台手机自己的那套色：
@@ -3043,20 +3053,21 @@ class MainActivity : Activity() {
     /** 面板层（顶栏 / 抽屉底）：夜景 #1E1E1E，比页面纯黑亮一档 */
     private val cPanel: Int
         get() = UiTok.panelBg(isDark())
+    // ★★ v1.4.31：深色改暮色后，文字不再是纯白，统一从 UiTokens 取（暖白 + 同比例透明度）
     private val cTextPrimary: Int
-        get() = if (isDark()) 0xE6FFFFFF.toInt() else 0xE6000000.toInt()
+        get() = UiTok.textPrimary(isDark())
     private val cTextSecondary: Int
-        get() = if (isDark()) 0x8AFFFFFF.toInt() else 0x8A000000.toInt()
+        get() = UiTok.textSecondary(isDark())
     private val cTextTertiary: Int
-        get() = if (isDark()) 0x70FFFFFF else 0x70000000
+        get() = UiTok.textTertiary(isDark())
     private val cTextFaint: Int
-        get() = if (isDark()) 0x45FFFFFF else 0x45000000
+        get() = UiTok.textFaint(isDark())
 
     /** 链接蓝：夜里用 accentOnSurface 的浅一档 #5C9DFF，白天用深一档 #0070E0 */
     private val cLink: Int
-        get() = Color.parseColor(if (isDark()) "#5C9DFF" else "#0070E0")
+        get() = UiTok.link(isDark())
     private val cRipple: Int
-        get() = Color.parseColor(if (isDark()) "#33FFFFFF" else "#1F000000")
+        get() = Color.parseColor(if (isDark()) "#33FFE0CC" else "#1F000000")
 
     /** 卡片/输入框边框：凝光的边几乎看不见，只负责"有个边"，别再加深 */
     private val cBorder: Int
@@ -3068,7 +3079,7 @@ class MainActivity : Activity() {
 
     /** 强调色（凝光蓝）：只用于 CTA / 选中 / 链接，不做装饰 */
     private val cAccent: Int
-        get() = Color.parseColor(if (isDark()) "#1A8CFF" else "#0080FF")
+        get() = UiTok.accent(isDark())
 
     /**
      * 超椭圆背景（全 App 唯一入口）。
@@ -3396,8 +3407,8 @@ class MainActivity : Activity() {
         try {
             d.window?.setBackgroundDrawable(android.graphics.drawable.GradientDrawable().apply {
                 cornerRadius = 20 * dp
-                setColor(if (dark) Color.parseColor("#1C1D1F") else Color.WHITE)
-                setStroke((1 * dp).toInt(), if (dark) 0x1FFFFFFF else 0x14000000)
+                setColor(UiTok.overlayBg(dark))
+                setStroke((1 * dp).toInt(), if (dark) 0x33FFD9C2 else 0x14000000)
             })
         } catch (t: Throwable) { SafeRun.w("MainActivity", t) }
         d.setOnShowListener {
@@ -3465,8 +3476,8 @@ class MainActivity : Activity() {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = radiusPx
-                setColor(if (dark) Color.parseColor("#1C1D1F") else Color.WHITE)
-                setStroke((1 * dp).toInt(), if (dark) 0x1FFFFFFF else 0x14000000)
+                setColor(UiTok.overlayBg(dark))
+                setStroke((1 * dp).toInt(), if (dark) 0x33FFD9C2 else 0x14000000)
             }
             clipToOutline = true
             outlineProvider = object : android.view.ViewOutlineProvider() {
@@ -6758,8 +6769,8 @@ class MainActivity : Activity() {
     /** ★ vc421：捐赠弹窗（收付款码图片；圆角 + 深浅色自适应） */
     private fun showDonate() {
         val dark = isDark()
-        val bgColor = if (dark) Color.parseColor("#1C1D1F") else Color.WHITE
-        val titleColor = if (dark) Color.parseColor("#F2F2F2") else Color.parseColor("#111111")
+        val bgColor = UiTok.overlayBg(dark)
+        val titleColor = if (dark) 0xFFF7F0E8.toInt() else Color.parseColor("#111111")
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -6846,8 +6857,8 @@ class MainActivity : Activity() {
     private fun showDisclaimer() {
         // ★ vc418：自建圆角弹窗，深/浅色自适应，文字取"反色"（深底浅字、浅底深字）
         val dark = isDark()
-        val bgColor = if (dark) Color.parseColor("#1C1D1F") else Color.WHITE
-        val titleColor = if (dark) Color.parseColor("#F2F2F2") else Color.parseColor("#111111")
+        val bgColor = UiTok.overlayBg(dark)
+        val titleColor = if (dark) 0xFFF7F0E8.toInt() else Color.parseColor("#111111")
         val bodyColor = if (dark) Color.parseColor("#C9C9C9") else Color.parseColor("#555555")
 
         val root = LinearLayout(this).apply {
@@ -10196,7 +10207,8 @@ class MainActivity : Activity() {
                             (16 * dp).toInt(), (10 * dp).toInt()
                         )
                         setBackgroundColor(
-                            if (isDark()) Color.parseColor("#1C1D1F")
+                            // ★ v1.4.31：暮色下的提示条用"余晖橙"15% 底，别再用冷灰
+                            if (isDark()) 0x33FF8A5B
                             else Color.parseColor("#FFF6E5")
                         )
                     }
@@ -11484,18 +11496,14 @@ class MainActivity : Activity() {
         // ★ vc264m：下拉松手刷新（SwipeRefreshLayout 包住 ScrollView）。
         //   触发调 fetchPickup(keepCards=true)——与 vc229 秒显同款：刷新中**保留已有卡**，
         //   不闪白；状态行改"刷新中·上次 xx:xx"，回来后再整体重绘
-        val swipe = androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this).apply {
-            setColorSchemeColors(cAccent)   // 转圈弧色 = 项目主色（靛紫）
-            setProgressBackgroundColorSchemeColor(if (isDark()) Color.parseColor("#1C1D1F") else Color.WHITE)
-            setDistanceToTriggerSync((88 * dp).toInt())    // 拉多少距离触发（手感）
-            setSlingshotDistance((140 * dp).toInt())       // 阻尼拉伸距离（拖拽更跟手）
-            // ★ vc369：滚动区外面包了一层 FrameLayout（放吸顶标题），SwipeRefreshLayout
-            //   默认问"直接子 View 能不能往上滚"——FrameLayout 不滚 ⇒ 永远判"到顶了"，
-            //   于是一往下拉就触发刷新。显式改成问里层的 ScrollView。
-            setOnChildScrollUpCallback { _, _ -> scroll.canScrollVertically(-1) }
-            setOnRefreshListener {
+        // ★★ v1.4.31：同款 [PullRefreshLayout]（内容不动，只弹一条进度线）。
+        //   这里包的是 scrollWrap（FrameLayout 装吸顶标题），所以"到顶没"要显式问里层 scroll。
+        val swipe = PullRefreshLayout(this).apply {
+            barColor = cAccent
+            canScrollUp = { scroll.canScrollVertically(-1) }
+            onRefresh = {
                 fetchPickup(keepCards = true)
-                // 兜底：60 秒还没停就强制收起（防异常路径卡转圈）
+                // 兜底：60 秒还没停就强制收起（防异常路径卡进度）
                 postDelayed({ if (isRefreshing) isRefreshing = false }, 60_000L)
             }
             addView(scrollWrap)
@@ -12002,6 +12010,31 @@ class MainActivity : Activity() {
             getString(R.string.settings_theme_section), themeBox, "theme_collapsed", themeCollapsed0
         ))
         card.addView(themeBox)
+
+        // ★★ v1.4.31：**「深色模式」总开关**（暮色）。
+        //   同志们的要求是"加一个开关，直接打开深色模式" —— 原来只有「跟随系统 / 自定义时段」
+        //   两个单选，想白天也看深色就没有入口（只能把系统切到深色，连别的 App 一起变）。
+        //   现在这个开关优先于下面两条：打开 = 一直暮色；关掉 = 回到跟随系统 / 时段。
+        run {
+            themeBox.addView(switchRow(
+                "深色模式（暮色）",
+                prefs.getBoolean(KEY_FORCE_DARK, false)
+            ) { on, _ ->
+                prefs.edit()
+                    .putBoolean(KEY_FORCE_DARK, on)
+                    .putBoolean(KEY_REOPEN_SETTINGS, true)
+                    .apply()
+                recreate()
+            })
+            themeBox.addView(hintLine(
+                if (prefs.getBoolean(KEY_FORCE_DARK, false))
+                    "已强制使用暮色：无论系统是浅色还是深色，App 都保持暮色配色。" +
+                            "关掉这个开关才会回到下面的「跟随系统 / 自定义时段」。"
+                else
+                    "打开后 App 固定使用暮色配色（深紫底 + 落日橙 + 暖白字），" +
+                            "不受系统深色开关影响；关掉则按下面的方式跟随。"
+            ))
+        }
 
         val accent = cAccent
 
@@ -16150,6 +16183,20 @@ class MainActivity : Activity() {
                 // 保留 pending 供后台补码，但不把无法识别的裸卡伪装成待取包裹显示。
                 Log.i("PddCache", "零信息 PDD 裸卡暂不上屏，保留后台补码：${p.optString("orderSn").take(22)}")
                 continue
+            }
+            // ★★ v1.4.31：**文案已明确"已取走"的卡不上屏**（与首页同一套词表）。
+            //   事故：`73-3-5888`（沐浴露）早就取了，缓存里还留着，卡片一直挂在取件码栏，
+            //   首页却因为多一道 looksTaken 把它挡掉了 ⇒ 两边数字永远对不上。
+            //   注意只在**没打已取件标记**时判：打了标记的灰卡是用户自己要核对 24h 的，照旧显示。
+            if (p.optLong("pickedAt", 0L) == 0L) {
+                val txt = (p.optString("latest") + " " + p.optString("statusText")).trim()
+                if (PddCodeStore.looksTakenText(txt)) {
+                    Log.i(
+                        "PickupTaken",
+                        "文案已取走，不上屏：${p.optString("pickupCode")}（${p.optString("orderSn").take(22)}）← $txt"
+                    )
+                    continue
+                }
             }
             visible.add(p)
         }

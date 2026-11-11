@@ -331,8 +331,9 @@ android {
         //   首页读落盘缓存打底 + 首页自己静默抓一轮（不再依赖在途页 UI）。
         // ★★ v1.4.30：首页取件码与取件码页同源（PickupGate）+ 作废码表 2 小时过期
         //   + 一码多单不再全删（保留最新一条）+ 快速轻点不再被吞。
-        versionCode = 749
-        versionName = "1.4.30"
+        // ★★ v1.4.31：刷新条不再顶内容（PullRefreshLayout）+ 深色模式改暮色并加总开关。
+        versionCode = 750
+        versionName = "1.4.31"
     }
 
     buildTypes {

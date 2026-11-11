@@ -341,6 +341,21 @@ check("首页取件码快照持久化（冷启动同源）",
 check("快照回查 alive 集合并挡脏码",
       "aliveByCode[hc.code] ?: return@mapNotNull null" in main
       and "looksTaken(c)) return@mapNotNull null" in main)
+# ---- v1.4.31：刷新不顶内容 + 暮色深色 ----
+pull = open(os.path.join(KT, "PullRefreshLayout.kt"), encoding="utf-8").read()
+tokens = open(os.path.join(KT, "UiTokens.kt"), encoding="utf-8").read()
+check("刷新控件不再移动内容（PullRefreshLayout）",
+      "class PullRefreshLayout" in pull
+      and "androidx.swiperefreshlayout.widget.SwipeRefreshLayout" not in main
+      and "val swipe = PullRefreshLayout(this)" in main)
+check("下拉只有到顶才接管",
+      "canScrollUp?.let { return !it() }" in pull and "horizontal" in pull)
+check("深色模式有手动开关且优先",
+      "KEY_FORCE_DARK" in main
+      and "prefs.getBoolean(KEY_FORCE_DARK, false))" in main
+      and "深色模式（暮色）" in main)
+check("深色色板改为暮色",
+      "0xFF1B1526" in tokens and "0xFFFF8A5B" in tokens)
 # ---- v1.4.27：更新链必须是多源（境内 raw 会被 reset，单源必挂）----
 check("清单多源回退",
       "FALLBACK_MANIFESTS" in checker and "fun manifestCandidates(" in checker
