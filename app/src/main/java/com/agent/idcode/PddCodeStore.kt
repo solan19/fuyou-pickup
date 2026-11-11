@@ -277,15 +277,39 @@ object PddCodeStore {
     private fun normCode(s: String) = s.trim().lowercase()
 
     /**
-     * 作废码的**有效期** —— 与取件码本身的认人时限同一个口径（[MuteStore] 的 7 天）。
-     * 格口码会被驿站回收再发，永久作废等于把这个码号段废掉。
+     * 作废码的**有效期**。
+     *
+     * ★★ v1.4.30：7 天 → **2 小时**（同志 2026-11-11 14:40 报「应当有 6 件待取，只显示 4 件」）。
+     *
+     * 这张表的本意只是挡住"**当轮**把同一个格口码分配给了多单"的污染 —— 那种污染几轮内就会
+     * 重新被抓到并再次拦截，不需要长期记忆。而 7 天禁写的代价是：
+     *  · 驿站格口码会被回收再发（`2-3-0009` 这种短码尤其常见），整段号段等于作废；
+     *  · 一次历史误判会**一直压着**，真实待取件永远写不进缓存 —— 真机实证：
+     *    `126-7-5758` / `97-6-1585` 各自当前只挂一个订单，仍被"拒写"，页面与首页同时少 2 件。
      */
-    private const val DEAD_TTL_MS = 7L * 86_400_000L
+    private const val DEAD_TTL_MS = 2L * 3_600_000L
 
-    /** 已作废的码 → 作废时刻（小写比较；超过 7 天的自动失效） */
+    /**
+     * ★★ v1.4.30：作废码表**规则版本**。规则一旦改（有效期、保留策略），旧判定就不能再沿用，
+     * 否则用户升级后仍被历史结论压着。首次运行到本版本时整表清空，让抓取链重新判定一次。
+     */
+    private const val KEY_DEAD_VER = "pdd_code_dead_ver"
+    private const val DEAD_VER = 2
+
+    /** 已作废的码 → 作废时刻（小写比较；超过有效期的自动失效） */
     @Synchronized
     fun deadCodes(ctx: Context): MutableMap<String, Long> {
         val out = HashMap<String, Long>()
+        // ★★ v1.4.30：规则换版 ⇒ 旧表整份作废（首次调用时清一次）
+        if (sp(ctx).getInt(KEY_DEAD_VER, 1) < DEAD_VER) {
+            try {
+                sp(ctx).edit().remove(KEY_DEAD).putInt(KEY_DEAD_VER, DEAD_VER).apply()
+                android.util.Log.i("PddCodeMatch", "作废码表规则升级 ⇒ 清空旧判定，重新判定一次")
+            } catch (t: Throwable) {
+                SafeRun.w("PddCodeStore", t)
+            }
+            return out
+        }
         val raw = sp(ctx).getString(KEY_DEAD, "") ?: ""
         if (raw.isBlank()) return out
         val now = System.currentTimeMillis()
@@ -366,12 +390,18 @@ object PddCodeStore {
             }
             markDead(ctx, cd)
             killed++
+            // ★★ v1.4.30：**"无主"不再全删**。
+            //   旧逻辑：没有「已取件」标记时 `drop = keys` ⇒ 两条缓存一起消失，
+            //   用户看到的是"两个真实待取件凭空不见"（同志本次 6 件变 4 件）。
+            //   现在保留 `ts` 最新的那一条（最近一次抓到的更可信），只删其余；
+            //   码本身仍进作废表（挡住拿它判"已到站"），2 小时后自动解禁。
             val owner = keys.firstOrNull { (map[it]?.pickedAt ?: 0L) != 0L }
-            val drop = if (owner != null) keys.filter { it != owner } else keys
+                ?: keys.maxByOrNull { map[it]?.ts ?: 0L }
+            val drop = keys.filter { it != owner }
             for (k in drop) map.remove(k)
             android.util.Log.i(
                 "PddCodeMatch",
-                "码 $cd 被 ${keys.size} 单共用 ⇒ 作废${if (owner != null) "（真主 ${owner.substringAfter(':')} 已取件，其余 ${drop.size} 条删除）" else "（无主，${drop.size} 条全删）"}"
+                "码 $cd 被 ${keys.size} 单共用 ⇒ 作废（保留 $owner，删除 ${drop.size} 条）"
             )
         }
         if (killed > 0) save(ctx, map)

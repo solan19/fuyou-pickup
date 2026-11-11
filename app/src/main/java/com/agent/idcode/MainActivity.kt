@@ -2917,6 +2917,9 @@ class MainActivity : Activity() {
         private const val KEY_PDD_LOGIN_NOTICE_OFF = "pdd_login_notice_off"
         private const val KEY_STATION_CODE = "pdd_station_code"
         private const val KEY_LAST_PKG_COUNT = "last_pkg_count"
+
+        /** ★ v1.4.30：取件码页发布给首页的那一屏待取码（JSON），冷启动直接复用 */
+        private const val KEY_HOME_FEED = "home_feed_snapshot"
         private const val KEY_LAST_PKG_TIME = "last_pkg_time"
         private const val KEY_LAST_TRANSIT_TIME = "last_transit_time"
         /** ★ vc255：上一次真正打 order_list_v4 的时刻（进页间隔闸用，见 ORDER_LIST_MIN_INTERVAL_MS） */
@@ -5231,28 +5234,36 @@ class MainActivity : Activity() {
         //   冲突清理搬走 / 文案被判已取走 / 补码只落到页面还没落盘）就会出现
         //   「页面上有码，首页 0 件」。⇒ 首页优先用 [homePickupCodes]（renderMerged 发布），
         //   只有它还没发布过（冷启动第一帧）才回落缓存。
-        val feed = homePickupCodes
+        // ★★ v1.4.30：**首页与取件码页共用同一份「这一屏待取码」**。
+        //   页面渲染时发布（内存 + 持久化），冷启动直接读持久化那份 —— 不再让首页自己另算一套。
+        val feed = homePickupCodes ?: loadHomeFeedSnapshot()
+        val aliveNow = try {
+            PickupGate.aliveEntries(this).map { it.second }
+        } catch (t: Throwable) {
+            SafeRun.w("HomePickup", t)
+            ArrayList<PddCodeStore.Cached>()
+        }
+        val aliveByCode = aliveNow.associateBy { it.code }
+        // 快照是"上次页面看到的那一屏"，可能已经过时 ⇒ 逐个回查当前有效集合，并挡掉文案已取走的脏码
+        val snapRows = feed?.asSequence()
+            ?.filter { !it.picked }
+            ?.mapNotNull { hc ->
+                val c = aliveByCode[hc.code] ?: return@mapNotNull null
+                // 73-3-5888 这类"缓存还在、文案已写已领取"的码，不能上首页
+                if (PddCodeStore.looksTaken(c)) return@mapNotNull null
+                hc.code to hc.station.ifBlank { c.station.ifBlank { "驿站待取" } }
+            }
+            ?.distinctBy { it.first }
+            ?.toList()
+            .orEmpty()
         val codeList: List<PddCodeStore.Cached>
         val feedRows: List<Pair<String, String>>
-        if (feed != null) {
+        if (snapRows.isNotEmpty()) {
             codeList = emptyList()
-            // ★★ v1.4.11：网格只画**还没取**的码（发布侧已过滤，这里再挡一层）。
-            //   取件后首页与取件码页同步撤掉，不留"已取件"的格子。
-            feedRows = feed.filter { !it.picked }.map { it.code to it.station.ifBlank { "驿站待取" } }
+            feedRows = snapRows
         } else {
-            // ★★ v1.4.16：**冷启动第一帧也过黑名单**（同志 14:20：「首页会出现在黑名单中的
-            //   已删除的取件码，显示待取」）。主路径靠 renderMerged 发布的 [homePickupCodes]，
-            //   但冷启动首帧还没发布过、走的是这条回落路径 ⇒ 这里不挡就照样冒出已删的码。
-            codeList = PddCodeStore.all(this).entries
-                .filter { (k, c) ->
-                    !PddCodeStore.isPicked(c) && c.code.isNotBlank() &&
-                        !PddCodeStore.looksTaken(c) && !isCachedEntryMuted(k, c)
-                }
-                .sortedByDescending { it.value.ts }
-                // ★ vc605：同一取件码可能被两个来源各存一条（截图中 1-3-4021 出现两次）
-                //   ⇒ 按码去重，保留时间最新的那条
-                .distinctBy { it.value.code }
-                .map { it.value }
+            // 没快照（或快照整份都失效）⇒ 直接按统一裁决出口算，同样挡掉"文案已取走"
+            codeList = aliveNow.filter { !PddCodeStore.looksTaken(it) }.distinctBy { it.code }
             feedRows = codeList.map { it.code to it.station.ifBlank { "驿站待取" } }
         }
         // ★ vc584：条数只认缓存（清空缓存就该显示 0）；旧写法回退 SP 历史计数 ⇒ 清了还显示旧数字
@@ -10966,7 +10977,11 @@ class MainActivity : Activity() {
                 }
                 android.view.MotionEvent.ACTION_UP -> {
                     val dt = System.currentTimeMillis() - at0
-                    if (!moved && dt in 60..1500) view.performClick()
+                    // ★ v1.4.30：下界 60ms → **40ms**。
+                    //   真机"快速轻点"常见 50-70ms，`adb input tap` 约 40-55ms，
+                    //   都会被旧阈值判成"划过"而**静默吞掉**（本次调试点「查看全部」两次没反应）。
+                    //   防滑动靠 `moved`（位移超 touchSlop）已经足够，时长下界只需挡住"贴一下就走"。
+                    if (!moved && dt in 40..1500) view.performClick()
                     else Log.i("TapGuard", "未算点击：movement=" + moved + " dt=" + dt + "ms")
                     true
                 }
@@ -11037,6 +11052,49 @@ class MainActivity : Activity() {
         } catch (t: Throwable) {
             SafeRun.w("HomeTransit", t)
             transitSilent = false
+        }
+    }
+
+    /**
+     * ★★ v1.4.30：把「取件码页这一屏的待取码」持久化。
+     *
+     * 原来只有内存字段 [homePickupCodes]，冷启动必然是 null ⇒ 首页只能回落自己重算，
+     * 于是"首页 6 件 / 页面 4 件"这种分叉随时会出现。持久化之后两边看的是同一份。
+     */
+    private fun saveHomeFeedSnapshot(list: List<HomeCode>) {
+        try {
+            val arr = org.json.JSONArray()
+            for (h in list) {
+                arr.put(
+                    org.json.JSONObject()
+                        .put("code", h.code)
+                        .put("station", h.station)
+                        .put("picked", h.picked)
+                )
+            }
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putString(KEY_HOME_FEED, arr.toString()).apply()
+        } catch (t: Throwable) {
+            SafeRun.w("HomeFeed", t)
+        }
+    }
+
+    /** 读回 [saveHomeFeedSnapshot] 存下的那一份；没有/损坏返回 null */
+    private fun loadHomeFeedSnapshot(): List<HomeCode>? {
+        val raw = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_HOME_FEED, "") ?: ""
+        if (raw.isBlank()) return null
+        return try {
+            val arr = org.json.JSONArray(raw)
+            val out = ArrayList<HomeCode>()
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val code = o.optString("code").trim()
+                if (code.isEmpty()) continue
+                out.add(HomeCode(code, o.optString("station"), o.optBoolean("picked", false)))
+            }
+            out.ifEmpty { null }
+        } catch (t: Throwable) {
+            null
         }
     }
 
@@ -16134,6 +16192,8 @@ class MainActivity : Activity() {
             if (fp != homeFeedFp) {
                 homeFeedFp = fp
                 homePickupCodes = feedNow
+                // ★ v1.4.30：持久化一份，冷启动首页直接读它（不必等再打开本页）
+                saveHomeFeedSnapshot(feedNow)
                 Log.i(
                     "HomeFeed",
                     "首页取件码同步 ${feedNow.size} 个（已标记 ${feedNow.count { it.picked }}）：" +

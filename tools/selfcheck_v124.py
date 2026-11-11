@@ -321,6 +321,26 @@ check("无层渲染时落盘并通知首页",
       "notifyHomeDataChanged(\"在途静默抓取\")" in main)
 check("回前台触发静默抓取",
       "mainHandler.postDelayed({ warmUpTransitForHome() }, 600L)" in main)
+# ---- v1.4.30：首页取件码与取件码页同源 + 作废码表不再长期压制真实件 ----
+check("作废码表有效期 2 小时（不再是 7 天）",
+      "DEAD_TTL_MS = 2L * 3_600_000L" in store and "7L * 86_400_000L" not in store)
+check("作废码表规则换版一次性清空",
+      "KEY_DEAD_VER" in store and "DEAD_VER = 2" in store
+      and "清空旧判定" in store)
+check("一码多单不再全删（保留最新一条）",
+      "keys.maxByOrNull { map[it]?.ts ?: 0L }" in store
+      and "保留 $owner" in store)
+check("首页首帧走 PickupGate 统一出口",
+      "PickupGate.aliveEntries(this)" in main
+      and "PddCodeStore.isPicked(c) && c.code.isNotBlank()" not in main)
+check("快速轻点不再被吞（40ms 下界）",
+      "dt in 40..1500" in main)
+check("首页取件码快照持久化（冷启动同源）",
+      "fun saveHomeFeedSnapshot(" in main and "fun loadHomeFeedSnapshot(" in main
+      and "homePickupCodes ?: loadHomeFeedSnapshot()" in main)
+check("快照回查 alive 集合并挡脏码",
+      "aliveByCode[hc.code] ?: return@mapNotNull null" in main
+      and "looksTaken(c)) return@mapNotNull null" in main)
 # ---- v1.4.27：更新链必须是多源（境内 raw 会被 reset，单源必挂）----
 check("清单多源回退",
       "FALLBACK_MANIFESTS" in checker and "fun manifestCandidates(" in checker
