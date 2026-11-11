@@ -5,12 +5,12 @@
    且必须显式带 --confirm。平时代码照常提交，但这个文件保持上一次已确认的版本。
    本脚本**只写文件**，不会自动 git commit / push；推送也需用户确认。
 
-用法示例：
+用法示例（版本号必须与 app/build.gradle.kts 一致；APK 放仓库 update/ 目录）：
   python tools/publish_update.py --confirm \
-      --version-code 743 --version-name 1.4.24 \
-      --apk ../../_work/signed.apk \
-      --apk-url "https://<已安装用户可访问的位置>/fuyou-1.4.24.apk" \
-      --notes "新增通知抓码平台化、自定义定时提醒、关于应用检查更新" \
+      --version-code 745 --version-name 1.4.26 \
+      --apk update/fuyou-1.4.26.apk \
+      --apk-url "https://raw.githubusercontent.com/solan19/fuyou-pickup/main/update/fuyou-1.4.26.apk" \
+      --notes "写明本版到底改了什么" \
       --force
 
 字段说明（App 端 UpdateChecker 读同一份 schema）：

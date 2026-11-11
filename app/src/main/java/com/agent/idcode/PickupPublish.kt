@@ -62,12 +62,16 @@ object PickupPublish {
         }
 
         // ② 流体云 / 实况位：未取件的码聚类成**一条**（vc699 起）
+        //   ★★ v1.4.26：承运商字段原来传 ""，而补推链（LiveUpdate / IslandHelper 的
+        //   syncFromSnapshot）传的是 PickupGate.srcLabel(src) ⇒ 同一张卡显不显示承运商，
+        //   取决于哪条链最后写；指纹又只看取件码，内容不一致也不会自愈。
+        //   现在所有入口统一用 srcLabel，一张卡只有一种长相。
         try {
             LiveUpdate.sync(ctx, list.map {
-                LiveUpdate.Entry(it.waybill, it.code, it.station, "")
+                LiveUpdate.Entry(it.waybill, it.code, it.station, PickupGate.srcLabel(it.src))
             })
             IslandHelper.sync(ctx, list.map {
-                IslandHelper.Entry(it.waybill, it.code, it.station, "")
+                IslandHelper.Entry(it.waybill, it.code, it.station, PickupGate.srcLabel(it.src))
             })
         } catch (t: Throwable) {
             SafeRun.w(TAG, t)

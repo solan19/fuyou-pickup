@@ -295,11 +295,20 @@ object MuteStore {
             if (eos.isNotEmpty() && os.isNotEmpty() && eos == os) return e
             // ② 运单号：准强，限 60 天（会被承运商回收再发）
             if (ewb.isNotEmpty() && wb.isNotEmpty() && ewb == wb && fresh(e.ts, now, WAYBILL_TTL_MS)) return e
-            // ③ 取件码：弱，必须同驿站 + 限 7 天（格口码天天复用）
+            // ③ 取件码：弱，限 7 天（格口码天天复用）
+            //   ★★ v1.4.26：原来还强制「双方驿站都非空且相同」，于是
+            //     · 通知抓码写进来的条目（只知道码、不知道驿站）；
+            //     · 无驿站的手动 / 补码条目
+            //   删除后写下的记录，永远命中不了任何一次后续查询 ⇒ 同一个码被下一轮抓取
+            //   或通知重新写回来（「删了又回来」的观感就是这么来的）。
+            //   现在：驿站**任一侧为空**就只按「码 + 7 天」判；两侧都有值时仍要求一致
+            //   （格口码在不同驿站会重复，不能跨驿站乱拦）。
             if (ecd.isNotEmpty() && cd.isNotEmpty() && ecd == cd &&
-                st.isNotEmpty() && norm(e.station).isNotEmpty() && norm(e.station) == st &&
                 fresh(e.ts, now, CODE_TTL_MS)
-            ) return e
+            ) {
+                val eSt = norm(e.station)
+                if (eSt.isEmpty() || st.isEmpty() || eSt == st) return e
+            }
         }
         return null
     }
@@ -322,8 +331,11 @@ object MuteStore {
         val exist = list.firstOrNull { old ->
             (usable(e.orderSn) && usable(old.orderSn) && norm(old.orderSn) == norm(e.orderSn)) ||
                     (usable(e.waybill) && usable(old.waybill) && norm(old.waybill) == norm(e.waybill)) ||
+                    // ★ v1.4.26：与 blocks() 同口径 —— 驿站任一侧为空时按「码」合并，
+                    //   否则通知抓码（无驿站）与手动删除（有驿站）会各存一条，同一件事两份记录。
                     (usable(e.code) && usable(old.code) && norm(old.code) == norm(e.code) &&
-                            norm(old.station) == norm(e.station))
+                            (norm(old.station).isEmpty() || norm(e.station).isEmpty() ||
+                                    norm(old.station) == norm(e.station)))
         }
         if (exist != null) {
             val merged = exist.copy(

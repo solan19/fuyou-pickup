@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""v1.4.24 L3 离线自检：不编译、不连真机，验证规则与边界。
+"""L3 离线自检（版本号从 build.gradle.kts 动态读取）：不编译、不连真机，验证规则与边界。
 
 覆盖：
   ① 各平台通知样例回放（样例从 NotifyRules.kt 的 SAMPLES 解析，只有一份真源）
@@ -22,6 +22,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KT = os.path.join(ROOT, "app/src/main/java/com/agent/idcode")
 FAIL = []
 TOTAL = 0
+
+# ★ v1.4.26：版本号**动态读取**（build.gradle.kts），不再硬编码在断言里。
+#   原来写死 743 / 744 / 1.4.24，每次提版本都要手改脚本，漏改就整片断言假失败。
+_gradle = open(os.path.join(ROOT, "app/build.gradle.kts"), encoding="utf-8").read()
+CUR_CODE = int(re.search(r"versionCode\s*=\s*(\d+)", _gradle).group(1))
+CUR_NAME = re.search(r'versionName\s*=\s*"([^"]+)"', _gradle).group(1)
+NEXT_CODE = CUR_CODE + 1
 
 
 def check(name, cond, detail=""):
@@ -182,7 +189,7 @@ required = {"schema", "published", "versionCode", "versionName", "apkUrl",
 check("清单字段齐全", set(u.keys()) == required, str(sorted(set(u.keys()) ^ required)))
 
 
-def verdict(info, current=743):
+def verdict(info, current=CUR_CODE):
     if not info.get("published"):
         return "NotPublished"
     if info.get("versionCode", 0) <= 0 or not info.get("apkUrl", "").startswith("https://"):
@@ -191,17 +198,19 @@ def verdict(info, current=743):
 
 
 check("未分发 → NotPublished", verdict(dict(u, published=False)) == "NotPublished")
-published = dict(u, published=True, versionCode=744, apkUrl="https://example.com/a.apk",
+published = dict(u, published=True, versionCode=NEXT_CODE, apkUrl="https://example.com/a.apk",
                  sha256="a" * 64)
-check("744 > 743 → Available", verdict(published) == "Available")
-check("743 = 743 → UpToDate", verdict(dict(published, versionCode=743)) == "UpToDate")
+check("%d > %d → Available" % (NEXT_CODE, CUR_CODE), verdict(published) == "Available")
+check("%d = %d → UpToDate" % (CUR_CODE, CUR_CODE),
+      verdict(dict(published, versionCode=CUR_CODE)) == "UpToDate")
 check("非 https 地址 → Failed", verdict(dict(published, apkUrl="http://x/a.apk")) == "Failed")
 check("force 只是展示标志（不弹窗）",
       isinstance(published.get("force"), bool) and published["force"] is False)
 
 # ---------------- ④ 发布闸门 ----------------
 script = os.path.join(ROOT, "tools/publish_update.py")
-r = subprocess.run([sys.executable, script, "--version-code", "743", "--version-name", "1.4.24",
+r = subprocess.run([sys.executable, script,
+                    "--version-code", str(CUR_CODE), "--version-name", CUR_NAME,
                     "--apk", os.path.join(ROOT, "aligned.apk"),
                     "--apk-url", "https://example.com/a.apk"],
                    capture_output=True, text=True)
@@ -237,10 +246,43 @@ check("流体云重推与渠道分流",
       and "canPostPromoted" in remind and "deviceAllowsIsland" in remind)
 check("普通通知让位 + 失败回退",
       "不发普通通知" in remind and "回退普通通知" in remind)
-check("清单默认地址改公开托管",
-      "fuyou-update.app.workbuddy.host" in checker and "sharecode=" in checker)
+check("清单默认地址指向公开仓库（镜像地址只作兼容）",
+      "https://raw.githubusercontent.com/solan19/fuyou-pickup/main/update.json" in checker
+      and "LEGACY_DEFAULT_URLS" in checker)
 check("清单 sha256 为 64 位 hex",
       bool(re.fullmatch(r"[0-9a-f]{64}", u.get("sha256", ""))))
+
+# ---------------- ⑤″ v1.4.26 审查整改的静态检查 ----------------
+pp = open(os.path.join(KT, "PickupPublish.kt"), encoding="utf-8").read()
+mute = open(os.path.join(KT, "MuteStore.kt"), encoding="utf-8").read()
+gi = open(os.path.join(ROOT, ".gitignore"), encoding="utf-8").read()
+wf = open(os.path.join(ROOT, ".github/workflows/release.yml"), encoding="utf-8").read()
+check("承运商标签单一口径（PickupPublish）",
+      "LiveUpdate.Entry(it.waybill, it.code, it.station, PickupGate.srcLabel(it.src))" in pp
+      and "IslandHelper.Entry(it.waybill, it.code, it.station, PickupGate.srcLabel(it.src))" in pp)
+check("承运商标签单一口径（RemindDelivery）",
+      remind.count("PickupGate.srcLabel(c.src)") >= 2
+      and 'c.station, "")' not in remind)
+check("屏蔽名单取件码弱匹配补缺（驿站任一侧为空也拦）",
+      "val eSt = norm(e.station)" in mute
+      and "eSt.isEmpty() || st.isEmpty() || eSt == st" in mute)
+check("小组件写入口过统一闸",
+      "private fun publishWidgetCodes()" in main
+      and "PickupGate.aliveEntries(this)" in main
+      and "publishWidgetCodes(pending)" not in main)
+check("提醒闹钟通道可见可控",
+      "fun alarmClock(ctx: Context)" in remind
+      and "fun setAlarmClock(ctx: Context, on: Boolean)" in remind
+      and "PickupReminder.alarmClock(ctx)" in remind)
+check("渠道回退必须说明原因",
+      "fun fallbackReason(ctx: Context): String" in remind
+      and "普通通知（" in remind)
+check("gitignore 放行分发目录 APK", "!update/*.apk" in gi)
+check("CI 不再出现明文签名密码",
+      "fuyou123456" not in wf and "secrets.KEYSTORE_BASE64" in wf)
+check("清单 apkUrl 指向仓库 update/ 目录", "/update/" in u.get("apkUrl", ""))
+check("版本号三处一致（gradle / 清单 / 自检读取）",
+      CUR_CODE > 0 and CUR_NAME and u.get("versionCode", 0) <= CUR_CODE)
 
 new_kt = ["NotifyRules.kt", "NotifyCodeSink.kt", "IdNotifyListener.kt",
           "PickupReminder.kt", "UpdateChecker.kt", "SquircleDrawable.kt"]

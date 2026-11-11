@@ -320,8 +320,11 @@ android {
         //   在四条链上各判一遍，后三条（PickupPublish / LiveUpdate 补推 / IslandHelper 补推）
         //   都只判 "有码 + 未取件"、**没过黑名单**；而且 PickupPublish 用整个 PddCodeStore、
         //   补推用 ExpressStore 快照交集 ⇒ 两个数据源互相覆盖，指纹来回翻（"没遵循规则"）。
-        versionCode = 744
-        versionName = "1.4.25"
+        // ★★ v1.4.26：2026-11-11 全仓审查整改（P0×3 / P1×6 / P2×6）——
+        //   清单地址归一、承运商口径统一、屏蔽名单弱匹配补缺、小组件过闸、提醒闹钟可配、
+        //   渠道回退说明原因、CI 改 Secrets、自检版本动态读取。
+        versionCode = 745
+        versionName = "1.4.26"
     }
 
     buildTypes {

@@ -59,6 +59,16 @@ object PickupReminder {
     private const val KEY_TIMES = "remind_times"
     private const val KEY_FIRED = "remind_fired"
 
+    /**
+     * ★ v1.4.26：「到点用用户闹钟通道（setAlarmClock）」开关，默认**开**。
+     *
+     * [KeepAlive] 的兜底闹钟默认**不用** setAlarmClock（`debug_alarm_clock=false`），
+     * 因为轮询不是用户设定的时刻，不该常驻一个状态栏闹钟图标；而提醒是用户亲手选的时刻，
+     * 语义上就该像闹钟，且 ColorOS 上它是唯一实测不被推迟 72h 的准时通道。
+     * 两者口径本来就不同 —— 但必须**各自可见、各自可控**，所以不再暗箱：给它一个开关。
+     */
+    private const val KEY_ALARM_CLOCK = "remind_alarm_clock"
+
     /** Worker 被推迟多久以内仍补发（分钟）；超过就当这一轮错过，不打扰 */
     private const val CATCHUP_MIN = 120
     private const val DAY_MIN = 1440
@@ -75,6 +85,15 @@ object PickupReminder {
         Log.i(TAG, "定时提醒 = $on")
         if (!on) sp(ctx).edit().remove(KEY_FIRED).apply()
         RemindScheduler.apply(ctx)
+    }
+
+    /** 到点是否走「用户闹钟」通道（默认开：最准时，代价是状态栏闹钟图标） */
+    fun alarmClock(ctx: Context): Boolean = sp(ctx).getBoolean(KEY_ALARM_CLOCK, true)
+
+    fun setAlarmClock(ctx: Context, on: Boolean) {
+        sp(ctx).edit().putBoolean(KEY_ALARM_CLOCK, on).apply()
+        Log.i(TAG, "提醒闹钟通道 = $on")
+        RemindScheduler.armNext(ctx)
     }
 
     /** 窗口（分钟数，0..1439）；起止相等视作全天，避免零长窗口把所有时刻都滤掉 */
@@ -267,7 +286,7 @@ object PickupReminder {
         val list = slots(ctx)
         return "开关=${if (enabled(ctx)) "开" else "关"} · 窗口 ${fmt(s)}–${fmt(e)} · " +
                 "时刻 ${if (list.isEmpty()) "未设置" else list.joinToString("、") { fmt(it) }} · " +
-                "${list.size}/$MAX_SLOTS 次"
+                "${list.size}/$MAX_SLOTS 次 · 闹钟通道=${if (alarmClock(ctx)) "开" else "关"}"
     }
 }
 
@@ -296,12 +315,28 @@ object RemindDelivery {
 
     fun capable(ctx: Context): Boolean = liveCapable(ctx) || islandCapable(ctx)
 
-    /** 设置页 / 日志里给人看的一句话 */
+    /** 设置页 / 日志里给人看的一句话（回退时**必须说明原因**，见 [fallbackReason]） */
     fun modeText(ctx: Context): String = when {
         liveCapable(ctx) && islandCapable(ctx) -> "流体云 + 超级岛"
         liveCapable(ctx) -> "流体云实况位"
         islandCapable(ctx) -> "超级岛"
-        else -> "普通通知"
+        else -> "普通通知（" + fallbackReason(ctx) + "）"
+    }
+
+    /**
+     * ★ v1.4.26：为什么回退普通通知 —— 不能静默降级。
+     *
+     * [LiveUpdate.canPostPromoted] 只在 `SDK_INT >= 36` 才可能为真（提升型通知是 Android 16
+     * 的 API），低于该版本的设备一律 false。原来设置页只显示「普通通知」，
+     * 用户分不清是系统版本不够、开关没开、还是没授权。这里把三种原因分开讲清楚。
+     */
+    fun fallbackReason(ctx: Context): String {
+        val liveWanted = try { LiveUpdate.isEnabled(ctx) } catch (_: Throwable) { false }
+        val islandWanted = try { IslandHelper.isEnabled(ctx) } catch (_: Throwable) { false }
+        if (!liveWanted && !islandWanted) return "流体云/超级岛都没开"
+        if (liveWanted && Build.VERSION.SDK_INT < 36) return "系统低于 Android 16，无提升型通知"
+        if (liveWanted) return "系统未授权提升型通知"
+        return "本机不支持超级岛"
     }
 
     /** @return 成功推上实况位的件数；0 = 没推成（调用方回退普通通知） */
@@ -309,8 +344,10 @@ object RemindDelivery {
         var ok = 0
         if (liveCapable(ctx)) {
             val entries = list.map { (k, c) ->
+                // ★ v1.4.26：承运商统一走 srcLabel（与 PickupPublish / syncFromSnapshot 同口径）
                 LiveUpdate.Entry(
-                    PickupGate.noOf(k, c).ifBlank { c.code }, c.code, c.station, ""
+                    PickupGate.noOf(k, c).ifBlank { c.code }, c.code, c.station,
+                    PickupGate.srcLabel(c.src)
                 )
             }
             val n = try {
@@ -324,7 +361,8 @@ object RemindDelivery {
         if (islandCapable(ctx)) {
             val entries = list.map { (k, c) ->
                 IslandHelper.Entry(
-                    PickupGate.noOf(k, c).ifBlank { c.code }, c.code, c.station, ""
+                    PickupGate.noOf(k, c).ifBlank { c.code }, c.code, c.station,
+                    PickupGate.srcLabel(c.src)
                 )
             }
             try {
@@ -502,20 +540,28 @@ object RemindScheduler {
             cancelAlarm(ctx)
             return
         }
-        try {
-            am.setAlarmClock(AlarmManager.AlarmClockInfo(at, showPi(ctx)), alarmPi(ctx))
-            Log.i(TAG, "准时闹钟 → " + SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(at)))
-        } catch (t: Throwable) {
-            Log.w(TAG, "setAlarmClock 失败，退回普通精确闹钟：${t.message}")
+        val atStr = SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(at))
+        // ★ v1.4.26：闹钟通道做成开关（见 PickupReminder.KEY_ALARM_CLOCK）。
+        //   与 KeepAlive 的口径差异不再暗箱：轮询不该占闹钟图标，用户亲手设的提醒该像闹钟。
+        if (PickupReminder.alarmClock(ctx)) {
             try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && am.canScheduleExactAlarms()) {
-                    am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, alarmPi(ctx))
-                } else {
-                    am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, alarmPi(ctx))
-                }
-            } catch (t2: Throwable) {
-                SafeRun.w(TAG, t2)
+                am.setAlarmClock(AlarmManager.AlarmClockInfo(at, showPi(ctx)), alarmPi(ctx))
+                Log.i(TAG, "准时闹钟（用户闹钟通道）→ $atStr")
+                return
+            } catch (t: Throwable) {
+                Log.w(TAG, "setAlarmClock 失败，退回精确闹钟：${t.message}")
             }
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && am.canScheduleExactAlarms()) {
+                am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, alarmPi(ctx))
+                Log.i(TAG, "精确闹钟（未走闹钟通道）→ $atStr")
+            } else {
+                am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, alarmPi(ctx))
+                Log.i(TAG, "非精确闹钟（无精确权限 / 已关闹钟通道）→ $atStr")
+            }
+        } catch (t2: Throwable) {
+            SafeRun.w(TAG, t2)
         }
     }
 

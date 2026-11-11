@@ -12357,7 +12357,10 @@ class MainActivity : Activity() {
         run {
             val nCard = linearCard().apply { orientation = LinearLayout.VERTICAL }
             nCard.addView(sectionTitle("通知抓取"))
-            nCard.addView(hintLine("只解析下面勾选的 App 通知；规则、误抓过滤与样例自检见 NotifyRules。"))
+            nCard.addView(hintLine(
+                "只解析下面勾选的 App 通知；规则、误抓过滤与样例自检见 NotifyRules。" +
+                        "总开关与 10 个平台**默认全开**（装完就能用），不需要的在这里逐个关掉。"
+            ))
             nCard.addView(switchRow(
                 "从通知抓取件码",
                 NotifyPrefs.enabled(this@MainActivity),
@@ -12406,6 +12409,29 @@ class MainActivity : Activity() {
                     PickupReminder.setEnabled(this@MainActivity, on)
                     rStatus.text = PickupReminder.describe(this@MainActivity)
                     appToast(this@MainActivity, if (on) "定时提醒已启用" else "定时提醒已关闭")
+                })
+                // ★ v1.4.26：闹钟通道开关（默认开）。与「后台保活」的兜底闹钟口径不同，
+                //   这里明说代价 —— 开 = 最准时但状态栏常驻闹钟图标；关 = 可能被系统推迟。
+                rCard.addView(switchRow(
+                    "到点用闹钟通道",
+                    PickupReminder.alarmClock(this@MainActivity),
+                    onMoreClick = {
+                        infoDialog(
+                            "到点用闹钟通道",
+                            "开启后用系统「用户闹钟」通道触发提醒（ColorOS 上唯一实测不被推迟的通道），" +
+                                    "代价是状态栏会常驻一个闹钟图标。\n\n" +
+                                    "关掉后改用精确闹钟/兜底轮询，图标没了，但系统省电策略可能把提醒推迟，" +
+                                    "最长可能拖到几小时后。"
+                        )
+                    }
+                ) { on, _ ->
+                    PickupReminder.setAlarmClock(this@MainActivity, on)
+                    rStatus.text = PickupReminder.describe(this@MainActivity)
+                    appToast(
+                        this@MainActivity,
+                        if (on) "已用闹钟通道（最准时，状态栏会显示闹钟图标）"
+                        else "已改用精确/兜底闹钟（可能被系统推迟）"
+                    )
                 })
                 val (ws, we) = PickupReminder.window(this@MainActivity)
                 rCard.addView(trackRow(
@@ -15873,8 +15899,8 @@ class MainActivity : Activity() {
                 mainHandler.post { runCatching { rebuildHome() } }
             }
         }
-        // 顺手把取件码推给桌面小组件
-        publishWidgetCodes(pending)
+        // 顺手把取件码推给桌面小组件（数据源 = PickupGate，与流体云 / 通知共用同一道闸）
+        publishWidgetCodes()
         // 后台快递跟踪：把本次抓到的全量包裹写成基线快照（TrackWorker 靠它判断"有没有变化"）
         publishTrackSnapshot()
         // ★ 流体云：**必须按快照推，不能按当次 pending**。
@@ -16187,17 +16213,30 @@ class MainActivity : Activity() {
      * 小组件自己不能联网（取件码要先登录、淘宝那条还要重载隐形 WebView 算签名），
      * 所以由 App 拉完数据后主动推过去 —— 这也是小组件唯一的数据来源。
      */
-    private fun publishWidgetCodes(pending: List<JSONObject>) {
+    /**
+     * 把**当前仍然有效**的取件码写进桌面小组件。
+     *
+     * ★★ v1.4.26：数据源从「当次渲染的 pending 列表」改成 [PickupGate.aliveEntries]。
+     *
+     * 原来这里只判 `pickedAt == 0`（vc229），**没有过屏蔽名单**，而它写的 key 与
+     * [PickupPublish] 是同一个 `widget_codes` ⇒ 前台渲染一跑就把后台那条「过闸后」的结果覆盖掉。
+     * 于是「长按删除 / 清已取」掉的码，只要 pending 里还留着（平台下一轮又把它报成待取），
+     * 桌面上就会再冒出来一次。现在整个 App 只有 [PickupGate] 一个「哪些码该给用户看」的出口。
+     */
+    private fun publishWidgetCodes() {
+        val alive = try {
+            PickupGate.aliveEntries(this)
+        } catch (t: Throwable) {
+            SafeRun.w("HomeWidgets", t)
+            emptyList()
+        }
         val codes = JSONArray()
-        for (p in pending) {
-            val c = p.optString("pickupCode")
-            // ★ vc229：已取件的不占小组件位置（码已经没用了）
-            if (c.isNotEmpty() && p.optLong("pickedAt", 0L) == 0L) {
-                codes.put(JSONObject().apply {
-                    put("src", p.optString("src"))
-                    put("code", c)
-                })
-            }
+        for ((_, c) in alive) {
+            if (c.code.isEmpty()) continue
+            codes.put(JSONObject().apply {
+                put("src", c.src)
+                put("code", c.code)
+            })
         }
         getSharedPreferences(PREFS, MODE_PRIVATE).edit()
             .putString(HomeWidgets.KEY_WIDGET_CODES, codes.toString())

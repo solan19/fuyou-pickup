@@ -3,6 +3,10 @@ build/
 .gradle/
 *.apk
 *.aab
+# ★ v1.4.26 例外：更新分发目录里的安装包**必须进仓库**。
+#   update.json 的 apkUrl 指向 update/ 下的包；被上面 *.apk 忽略就会「清单指着一个不存在的文件」
+#   （v1.4.25 是靠 git add -f 强加的，下次换文件名用 git add -A 就漏，用户下载直接 404）。
+!update/*.apk
 
 # 本机配置
 local.properties

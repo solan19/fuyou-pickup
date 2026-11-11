@@ -63,14 +63,35 @@ sealed class CheckResult {
 object UpdatePrefs {
     private const val PREF = "idcode_prefs"
     private const val KEY_URL = "update_manifest_url"
-    // ★ v1.4.25：仓库是私有的，raw.githubusercontent.com 匿名读不到（403）。
-    //   清单与 APK 改放在公开发布页；该站点要求带 sharecode 才能访问静态资源。
-    const val DEFAULT_URL = "https://fuyou-update.app.workbuddy.host/update.json?sharecode=2QYLZIN5LX"
+    // ★★ v1.4.26：默认地址回到**公开仓库**的 raw 清单 —— 全 App 只认这一个正式源。
+    //   v1.4.25 把默认值指向了临时发布页，而 update.json 的正式源是仓库 raw ⇒
+    //   两套地址各读各的，镜像页一旦忘了同步就显示「清单读取失败」。
+    //   镜像页今后只作说明/兜底，不再出现在默认值里。
+    const val DEFAULT_URL = "https://raw.githubusercontent.com/solan19/fuyou-pickup/main/update.json"
+
+    /**
+     * v1.4.25 及更早版本**内置过**的默认地址。
+     *
+     * 老用户的 prefs 里可能原样存着它（那是旧默认值，不是他自己改的）。照旧跟着它走，
+     * 升级后仍然读临时发布页 ⇒ 与正式源不一致。识别出来直接清掉、归位到 [DEFAULT_URL]。
+     */
+    private val LEGACY_DEFAULT_URLS = listOf(
+        "https://fuyou-update.app.workbuddy.host/update.json?sharecode=2QYLZIN5LX",
+        "https://fuyou-update.app.workbuddy.host/update.json"
+    )
 
     private fun sp(ctx: Context) = ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
 
-    fun url(ctx: Context): String =
-        sp(ctx).getString(KEY_URL, DEFAULT_URL).orEmpty().ifBlank { DEFAULT_URL }
+    /** 当前生效的清单地址（旧内置默认值自动归位，见 [LEGACY_DEFAULT_URLS]） */
+    fun url(ctx: Context): String {
+        val saved = sp(ctx).getString(KEY_URL, null)?.trim().orEmpty()
+        if (saved.isEmpty()) return DEFAULT_URL
+        if (LEGACY_DEFAULT_URLS.any { it.equals(saved, ignoreCase = true) }) {
+            sp(ctx).edit().remove(KEY_URL).apply()
+            return DEFAULT_URL
+        }
+        return saved
+    }
 
     fun setUrl(ctx: Context, u: String) {
         sp(ctx).edit().putString(KEY_URL, u.trim()).apply()
