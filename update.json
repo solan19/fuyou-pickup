@@ -3,10 +3,10 @@
   "published": true,
   "versionCode": 744,
   "versionName": "1.4.25",
-  "apkUrl": "https://fuyou-update.app.workbuddy.host/fuyou-1.4.25.apk?sharecode=2QYLZIN5LX",
+  "apkUrl": "https://raw.githubusercontent.com/solan19/fuyou-pickup/main/update/fuyou-1.4.25.apk",
   "sha256": "00fcbbfc880362da557e6dccf35c623984c06d9fc304ffdef146b28897dba18a",
-  "notes": "1.4.25：修复定时提醒到点不发送、删除提醒时刻跳到取件码页；开着流体云/超级岛且设备支持时，到点只推实况位、不发普通通知。",
+  "notes": "1.4.25：修复定时提醒到点不发送、删除提醒时刻跳到取件码页；开着流体云/超级岛且设备支持时，到点只推实况位、不发普通通知。（分发通道：公开仓库 raw）",
   "force": false,
   "minSupport": 0,
-  "publishedAt": "2026-11-11T00:29:56+08:00"
+  "publishedAt": "2026-11-11T10:33:39+08:00"
 }
