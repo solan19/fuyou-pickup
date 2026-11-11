@@ -1,12 +1,12 @@
 {
   "schema": 1,
   "published": true,
-  "versionCode": 745,
-  "versionName": "1.4.26",
-  "apkUrl": "https://raw.githubusercontent.com/solan19/fuyou-pickup/main/update/fuyou-1.4.26.apk",
-  "sha256": "a28f0e917fb0c0726c53560384e71bc3ba7ba621e363713cab399128872dc20d",
-  "notes": "1.4.26：全仓审查整改 —— 更新清单地址归一（公开仓库 raw）、流体云/超级岛承运商与正文口径统一、屏蔽名单取件码弱匹配补缺（删掉的码不再被写回）、桌面小组件改走统一闸、定时提醒新增「到点用闹钟通道」开关、渠道回退说明原因、CI 签名材料改 Secrets。",
+  "versionCode": 746,
+  "versionName": "1.4.27",
+  "apkUrl": "https://fuyou-update.app.workbuddy.host/fuyou-1.4.27.apk?sharecode=2QYLZIN5LX",
+  "sha256": "ff1e8af65fe5bb2325ab8ef3b3a7ed4a22c2742a53b551331f1ff16caf5b85f2",
+  "notes": "1.4.27：修「检查更新显示 connection reset」—— 清单与安装包都改成多源自动回退（镜像页 / gcore.jsDelivr / ghproxy / GitHub raw），任何一条被网络重置也能更新。",
   "force": false,
   "minSupport": 0,
-  "publishedAt": "2026-11-11T13:30:55+08:00"
+  "publishedAt": "2026-11-11T13:49:05+08:00"
 }
