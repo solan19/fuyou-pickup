@@ -295,11 +295,23 @@ object UpdateChecker {
             out.add("https://gcore.jsdelivr.net/gh/$owner/$repo@$ref/$path")
             out.add("https://ghproxy.net/$apkUrl")
             out.add(apkUrl)
-        } else {
-            if (apkUrl.contains("app.workbuddy.host") && !apkUrl.contains("sharecode=")) {
-                out.add(apkUrl + (if (apkUrl.contains('?')) "&" else "?") +
-                        "sharecode=" + UpdatePrefs.MIRROR_SHARECODE)
+        } else if (apkUrl.contains("app.workbuddy.host")) {
+            // 清单里的 apkUrl 也可能直接是镜像页（旧版 App 只认这一个地址，必须这样写才行）
+            val full = if (apkUrl.contains("sharecode=")) apkUrl
+            else apkUrl + (if (apkUrl.contains('?')) "&" else "?") +
+                    "sharecode=" + UpdatePrefs.MIRROR_SHARECODE
+            out.add(full)
+            // 再从文件名推两个 CDN 备源：镜像站挂了也不至于没得下
+            val name = apkUrl.substringBefore('?').substringAfterLast('/')
+            if (name.startsWith("fuyou-") && name.endsWith(".apk")) {
+                out.add("https://gcore.jsdelivr.net/gh/solan19/fuyou-pickup@main/update/$name")
+                out.add(
+                    "https://ghproxy.net/https://raw.githubusercontent.com/" +
+                            "solan19/fuyou-pickup/main/update/$name"
+                )
             }
+            out.add(apkUrl)
+        } else {
             out.add(apkUrl)
         }
         return out.toList()
