@@ -80,6 +80,27 @@ object UpdatePrefs {
         "https://fuyou-update.app.workbuddy.host/update.json"
     )
 
+    /**
+     * ★★ v1.4.27：**备用清单源**（同一份内容的不同镜像）。
+     *
+     * 为什么必须有：`raw.githubusercontent.com` 在境内经常**被链路直接重置**，
+     * 不是 404、不是超时，而是 `Connection reset` —— 2026-11-11 本机直连实测：
+     *   raw.githubusercontent.com       → http=000（reset）
+     *   cdn.jsdelivr.net                → http=000（reset）
+     *   gcore.jsdelivr.net              → 200
+     *   ghproxy.net                     → 200
+     *   自建镜像页 app.workbuddy.host    → 200
+     * 所以「只写一个 raw 地址」在国内等于赌运气。
+     */
+    val FALLBACK_MANIFESTS = listOf(
+        "https://fuyou-update.app.workbuddy.host/update.json?sharecode=2QYLZIN5LX",
+        "https://gcore.jsdelivr.net/gh/solan19/fuyou-pickup@main/update.json",
+        "https://ghproxy.net/https://raw.githubusercontent.com/solan19/fuyou-pickup/main/update.json"
+    )
+
+    /** 镜像页静态资源的 sharecode（该站点不带就 403） */
+    const val MIRROR_SHARECODE = "2QYLZIN5LX"
+
     private fun sp(ctx: Context) = ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
 
     /** 当前生效的清单地址（旧内置默认值自动归位，见 [LEGACY_DEFAULT_URLS]） */
@@ -90,6 +111,19 @@ object UpdatePrefs {
             sp(ctx).edit().remove(KEY_URL).apply()
             return DEFAULT_URL
         }
+        return saved
+    }
+
+    /**
+     * ★ v1.4.27：用户**自己改过**的清单地址；没改过返回 null。
+     *
+     * 只有它才排候选列表第一 —— 内置默认值（raw）在国内大概率被重置，
+     * 若把它也排前面，每次「检查更新」都要白等一次 reset 才轮到镜像。
+     */
+    fun customUrl(ctx: Context): String? {
+        val saved = sp(ctx).getString(KEY_URL, null)?.trim().orEmpty()
+        if (saved.isEmpty() || saved == DEFAULT_URL) return null
+        if (LEGACY_DEFAULT_URLS.any { it.equals(saved, ignoreCase = true) }) return null
         return saved
     }
 
@@ -110,17 +144,47 @@ object UpdateChecker {
         0L
     }
 
-    /** 同步检查 —— 调用方必须在后台线程调（或用 [checkAsync]）。 */
+    /** 上一个失败的源给出的原因，用于「所有源都不通」时的提示 */
+    private var lastError: String = "网络不可用"
+
+    /**
+     * ★★ v1.4.27：清单候选地址 —— 手改地址 → 镜像/CDN → 正式源（raw 排最后）。
+     * 只写一个源在国内不够用，见 [UpdatePrefs.FALLBACK_MANIFESTS]。
+     */
+    fun manifestCandidates(ctx: Context): List<String> {
+        val out = LinkedHashSet<String>()
+        UpdatePrefs.customUrl(ctx)?.let { out.add(it) }
+        out.addAll(UpdatePrefs.FALLBACK_MANIFESTS)
+        out.add(UpdatePrefs.DEFAULT_URL)
+        return out.toList()
+    }
+
+    /** 同步检查 —— 调用方必须在后台线程调（或用 [checkAsync]）。多源逐个试，第一个通的就用。 */
     fun check(ctx: Context): CheckResult {
+        val list = manifestCandidates(ctx)
+        for (u in list) {
+            val r = checkOne(ctx, u)
+            if (r != null) return r
+        }
+        return CheckResult.Failed("所有清单源都不可用（$lastError），可在设置里改清单地址")
+    }
+
+    /** @return null = 这个源不可用（换下一个）；非 null = 拿到了有效结论 */
+    private fun checkOne(ctx: Context, url: String): CheckResult? {
         var conn: HttpURLConnection? = null
         try {
-            conn = URL(UpdatePrefs.url(ctx)).openConnection() as HttpURLConnection
+            conn = URL(url).openConnection() as HttpURLConnection
             conn.connectTimeout = CONNECT_TIMEOUT
             conn.readTimeout = READ_TIMEOUT
             conn.requestMethod = "GET"
             conn.setRequestProperty("Cache-Control", "no-cache")
+            conn.setRequestProperty("User-Agent", "IdCode-UpdateChecker")
             val code = conn.responseCode
-            if (code != 200) return CheckResult.Failed("清单读取失败（HTTP $code）")
+            if (code != 200) {
+                lastError = "HTTP $code"
+                Log.w(TAG, "清单源不可用（HTTP $code）：$url")
+                return null
+            }
             val body = conn.inputStream.bufferedReader().use { it.readText() }
             val o = JSONObject(body)
             if (!o.optBoolean("published", false)) {
@@ -130,18 +194,21 @@ object UpdateChecker {
             if (info.versionCode <= 0L || info.apkUrl.isBlank() ||
                 !info.apkUrl.startsWith("https://")
             ) {
-                return CheckResult.Failed("清单内容不完整（版本号或 APK 地址）")
+                lastError = "清单内容不完整"
+                Log.w(TAG, "清单内容不完整：$url")
+                return null
             }
             val cur = currentCode(ctx)
-            return if (info.versionCode > cur) {
-                Log.i(TAG, "发现新版本 ${info.versionName}(${info.versionCode})，当前 $cur")
-                CheckResult.Available(info)
-            } else {
-                CheckResult.UpToDate(cur)
-            }
+            Log.i(
+                TAG,
+                "清单源 ${runCatching { URL(url).host }.getOrDefault("?")} ⇒ " +
+                        "${info.versionName}(${info.versionCode})，当前 $cur"
+            )
+            return if (info.versionCode > cur) CheckResult.Available(info) else CheckResult.UpToDate(cur)
         } catch (t: Throwable) {
-            Log.w(TAG, "检查更新失败：${t.message}")
-            return CheckResult.Failed("检查失败：${t.message ?: "网络不可用"}")
+            lastError = t.message ?: t.javaClass.simpleName
+            Log.w(TAG, "清单源不可用（$lastError）：$url")
+            return null
         } finally {
             try {
                 conn?.disconnect()
@@ -202,39 +269,100 @@ object UpdateChecker {
         return File(dir, "fuyou-${info.versionName}.apk")
     }
 
+    private val RAW_APK = Regex("^https://raw\\.githubusercontent\\.com/([^/]+)/([^/]+)/([^/]+)/(.+)$")
+
+    /**
+     * ★★ v1.4.27：安装包的候选地址。
+     *
+     * 清单里 `apkUrl` 写的是 raw（正式源），但境内大概率被重置 ⇒ 同一份文件再换 CDN / 镜像重试。
+     * 每个候选都**独立校验 SHA-256**，第一个校验通过才算成功（镜像给错文件也不会装上）。
+     */
+    fun apkCandidates(apkUrl: String): List<String> {
+        val out = LinkedHashSet<String>()
+        val m = RAW_APK.find(apkUrl)
+        if (m != null) {
+            val owner = m.groupValues[1]
+            val repo = m.groupValues[2]
+            val ref = m.groupValues[3]
+            val path = m.groupValues[4]
+            // 顺序按**实测速度**排（2026-11-11，3.28MB 的包）：
+            //   镜像页 6.3s 下完 ／ gcore 20s 只到 3.11MB ／ ghproxy 20s 只到 1.46MB ／ raw 直接 reset
+            // ⇒ 镜像第一，CDN 其次，raw 垫底（能通最好，不通也不至于卡住）。
+            out.add(
+                "https://fuyou-update.app.workbuddy.host/" + path.substringAfterLast('/') +
+                        "?sharecode=" + UpdatePrefs.MIRROR_SHARECODE
+            )
+            out.add("https://gcore.jsdelivr.net/gh/$owner/$repo@$ref/$path")
+            out.add("https://ghproxy.net/$apkUrl")
+            out.add(apkUrl)
+        } else {
+            if (apkUrl.contains("app.workbuddy.host") && !apkUrl.contains("sharecode=")) {
+                out.add(apkUrl + (if (apkUrl.contains('?')) "&" else "?") +
+                        "sharecode=" + UpdatePrefs.MIRROR_SHARECODE)
+            }
+            out.add(apkUrl)
+        }
+        return out.toList()
+    }
+
     /** @return 是否成功下载并通过校验 */
     private fun doDownload(
         activity: Activity,
         info: UpdateInfo,
         post: (String) -> Unit,
     ): Boolean {
-        post("正在下载更新…")
+        val list = apkCandidates(info.apkUrl)
+        var last = "未知错误"
+        for ((i, u) in list.withIndex()) {
+            post("正在下载更新…（源 ${i + 1}/${list.size}）")
+            val r = downloadOne(activity, info, u)
+            when (r) {
+                1 -> {
+                    post("下载完成，等待系统安装器")
+                    Log.i(TAG, "下载成功：$u")
+                    return true
+                }
+                2 -> last = "SHA-256 校验不一致"
+                else -> last = "下载失败"
+            }
+        }
+        post("下载失败：所有下载源都不可用（$last）")
+        return false
+    }
+
+    /** @return 1=成功 2=校验不一致 0=这个源不可用 */
+    private fun downloadOne(activity: Activity, info: UpdateInfo, url: String): Int {
         var conn: HttpURLConnection? = null
+        val f = targetFile(activity, info)
         try {
-            conn = URL(info.apkUrl).openConnection() as HttpURLConnection
+            conn = URL(url).openConnection() as HttpURLConnection
             conn.connectTimeout = 15_000
             conn.readTimeout = 30_000
             conn.instanceFollowRedirects = true
-            val code = conn.responseCode
-            if (code != 200) {
-                post("下载失败（HTTP $code）")
-                return false
+            conn.setRequestProperty("User-Agent", "IdCode-UpdateChecker")
+            if (conn.responseCode != 200) {
+                Log.w(TAG, "下载源不可用（HTTP ${conn.responseCode}）：$url")
+                return 0
             }
-            val f = targetFile(activity, info)
             conn.inputStream.use { input ->
                 FileOutputStream(f).use { out -> input.copyTo(out) }
             }
             if (info.sha256.isNotBlank()) {
-                post("正在校验安装包…")
                 val actual = sha256(f)
                 if (!actual.equals(info.sha256, ignoreCase = true)) {
+                    Log.w(TAG, "下载源校验不一致：$url（实际 $actual）")
                     f.delete()
-                    post("校验失败（SHA-256 不一致），已删除下载文件")
-                    return false
+                    return 2
                 }
             }
-            post("下载完成，等待系统安装器")
-            return true
+            return 1
+        } catch (t: Throwable) {
+            Log.w(TAG, "下载源不可用（${t.message}）：$url")
+            try {
+                if (f.exists()) f.delete()
+            } catch (_: Throwable) {
+            }
+            return 0
         } finally {
             try {
                 conn?.disconnect()

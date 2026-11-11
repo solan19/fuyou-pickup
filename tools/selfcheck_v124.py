@@ -281,6 +281,18 @@ check("gitignore 放行分发目录 APK", "!update/*.apk" in gi)
 check("CI 不再出现明文签名密码",
       "fuyou123456" not in wf and "secrets.KEYSTORE_BASE64" in wf)
 check("清单 apkUrl 指向仓库 update/ 目录", "/update/" in u.get("apkUrl", ""))
+# ---- v1.4.27：更新链必须是多源（境内 raw 会被 reset，单源必挂）----
+check("清单多源回退",
+      "FALLBACK_MANIFESTS" in checker and "fun manifestCandidates(" in checker
+      and "gcore.jsdelivr.net" in checker and "ghproxy.net" in checker)
+check("check() 逐个试源、不再单发",
+      "for (u in list)" in checker
+      and "URL(UpdatePrefs.url(ctx)).openConnection()" not in checker)
+check("安装包多源回退",
+      "fun apkCandidates(" in checker and "downloadOne(" in checker
+      and "RAW_APK" in checker)
+check("手改地址优先、默认值不挡路",
+      "fun customUrl(" in checker and "UpdatePrefs.customUrl(ctx)?.let" in checker)
 check("版本号三处一致（gradle / 清单 / 自检读取）",
       CUR_CODE > 0 and CUR_NAME and u.get("versionCode", 0) <= CUR_CODE)
 

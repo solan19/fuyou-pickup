@@ -13170,6 +13170,11 @@ class MainActivity : Activity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { leftMargin = (8 * dp).toInt() })
             aboutCard.addView(updRow)
+            // ★ v1.4.27：说明「多源自动回退」——用户不必自己去手改地址
+            aboutCard.addView(hintLine(
+                "清单与安装包会自动在镜像页 / jsDelivr / GitHub 之间回退，某一条被网络重置也能更新；" +
+                        "下面那行地址只在你手动改过时才优先使用。"
+            ))
             aboutCard.addView(trackRow(
                 "更新清单地址",
                 TextView(this).apply {

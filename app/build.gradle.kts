@@ -323,8 +323,10 @@ android {
         // ★★ v1.4.26：2026-11-11 全仓审查整改（P0×3 / P1×6 / P2×6）——
         //   清单地址归一、承运商口径统一、屏蔽名单弱匹配补缺、小组件过闸、提醒闹钟可配、
         //   渠道回退说明原因、CI 改 Secrets、自检版本动态读取。
-        versionCode = 745
-        versionName = "1.4.26"
+        // ★★ v1.4.27：更新检查改**多源自动回退**（清单 + 安装包）——
+        //   raw.githubusercontent.com 境内被链路重置（Connection reset），单源必失败。
+        versionCode = 746
+        versionName = "1.4.27"
     }
 
     buildTypes {
